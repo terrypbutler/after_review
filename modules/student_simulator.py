@@ -1,6 +1,7 @@
 import streamlit as st
 import json
 import re
+from config import REACTION_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.photo_utils import display_student_photo
@@ -107,7 +108,7 @@ def render_simulator(df, cohort):
             # --- 1. FAST TEXT GENERATION ---
             with st.spinner(f"{selected_student} is typing..."):
                 try:
-                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    model = genai.GenerativeModel(REACTION_MODEL)
                     response = model.generate_content(system_prompt, generation_config={"response_mime_type": "application/json"})
 
                     if not response.parts:
