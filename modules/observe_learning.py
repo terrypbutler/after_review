@@ -3,6 +3,7 @@ import json
 import random
 import re
 from PIL import Image
+from config import REACTION_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.photo_utils import display_student_photo
@@ -126,7 +127,7 @@ def render_observation_room(df, cohort):
 
                 with st.spinner(f"{target_name} is reacting..."):
                     try:
-                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        model = genai.GenerativeModel(REACTION_MODEL)
                         contents = [system_prompt]
                         if st.session_state.obs_image is not None:
                             contents.append(st.session_state.obs_image)
@@ -259,7 +260,7 @@ def render_observation_room(df, cohort):
                             
                             with st.spinner("Watching the room settle..."):
                                 try:
-                                    model = genai.GenerativeModel('gemini-2.5-flash')
+                                    model = genai.GenerativeModel(REACTION_MODEL)
                                     contents = [start_prompt]
                                     if st.session_state.obs_image is not None: contents.append(st.session_state.obs_image)
                                         
@@ -348,7 +349,7 @@ def render_observation_room(df, cohort):
                             
                             with st.spinner(f"Scanning {len(st.session_state.obs_active_students)} students..."):
                                 try:
-                                    model = genai.GenerativeModel('gemini-2.5-flash')
+                                    model = genai.GenerativeModel(REACTION_MODEL)
                                     contents = [obs_prompt]
                                     if st.session_state.obs_image is not None: contents.append(st.session_state.obs_image)
                                         
@@ -450,7 +451,7 @@ def render_observation_room(df, cohort):
                     )
                     
                     try:
-                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        model = genai.GenerativeModel(REACTION_MODEL)
                         response = model.generate_content(broadcast_prompt, generation_config={"response_mime_type": "application/json"})
                         
                         if not response.parts:
