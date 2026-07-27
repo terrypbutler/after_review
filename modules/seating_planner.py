@@ -1,5 +1,6 @@
 import streamlit as st
 import random
+from config import REACTION_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.photo_utils import display_student_photo
@@ -244,7 +245,7 @@ def render_seating_plan(df, cohort):
             )
             
             try:
-                model = genai.GenerativeModel('gemini-2.5-flash')
+                model = genai.GenerativeModel(REACTION_MODEL)
                 response = model.generate_content(prompt)
                 st.session_state.mentor_chat = [{"role": "assistant", "content": response.text}]
             except Exception as e:
@@ -270,7 +271,7 @@ def render_seating_plan(df, cohort):
                     f"Chat History:\n{chat_history}\n\n"
                     "Acknowledge their reasoning, offer a final piece of advice on classroom management, and wish them luck with the lesson. Keep it brief."
                 )
-                model = genai.GenerativeModel('gemini-2.5-flash')
+                model = genai.GenerativeModel(REACTION_MODEL)
                 response = model.generate_content(follow_up_prompt)
                 
                 st.session_state.mentor_chat.append({"role": "assistant", "content": response.text})
