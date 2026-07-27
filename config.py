@@ -3,6 +3,12 @@ APP_SHORT_NAME = "Butler Academy"
 APP_TAGLINE = "Know the class. Rehearse the lesson. Notice more."
 APP_VERSION = "0.8"
 
+# Fast model for short, interactive pupil and mentor responses.
+REACTION_MODEL = "gemini-3.5-flash-lite"
+
+# More capable model for complex lesson-plan analysis.
+ANALYSIS_MODEL = "gemini-3.6-flash"
+
 YEAR_7_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRWjfO_UYUARLvEtyHGb0tW35YcgG0R6175_MvHnKkCSx-o6Aq7hvFOpjiobdoh7hmjULvIEdRWX8Ik/pub?gid=0&single=true&output=csv"
 YEAR_10_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRWjfO_UYUARLvEtyHGb0tW35YcgG0R6175_MvHnKkCSx-o6Aq7hvFOpjiobdoh7hmjULvIEdRWX8Ik/pub?gid=214766920&single=true&output=csv"
 
