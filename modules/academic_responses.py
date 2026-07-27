@@ -5,6 +5,7 @@ import time
 import random
 import re
 from PIL import Image
+from config import REACTION_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.photo_utils import display_student_photo
@@ -85,7 +86,7 @@ def fetch_ai_answers(question, student_subset, instructions, uploaded_file, coho
     
     for attempt in range(3):
         try:
-            model = genai.GenerativeModel('gemini-2.5-pro')
+            model = genai.GenerativeModel(REACTION_MODEL)
             contents = [prompt]
             if uploaded_file is not None: contents.append(Image.open(uploaded_file))
                 
@@ -275,7 +276,7 @@ def render_academic_responses(df, cohort, subject="General"):
                         """
                         
                         try:
-                            model = genai.GenerativeModel('gemini-2.5-pro')
+                            model = genai.GenerativeModel(REACTION_MODEL)
                             response = model.generate_content(chat_prompt, generation_config={"response_mime_type": "application/json"})
                             
                             ai_data = json.loads(response.text)
@@ -494,7 +495,7 @@ def render_academic_responses(df, cohort, subject="General"):
                             """
                             
                             try:
-                                model = genai.GenerativeModel('gemini-2.5-pro')
+                                model = genai.GenerativeModel(REACTION_MODEL)
                                 response = model.generate_content(chat_prompt, generation_config={"response_mime_type": "application/json"})
                                 
                                 ai_data = json.loads(response.text)
@@ -592,7 +593,7 @@ def render_academic_responses(df, cohort, subject="General"):
                         """
                         
                         try:
-                            model = genai.GenerativeModel('gemini-2.5-pro')
+                            model = genai.GenerativeModel(REACTION_MODEL)
                             response = model.generate_content(chat_prompt, generation_config={"response_mime_type": "application/json"})
                             
                             ai_data = json.loads(response.text)
