@@ -21,8 +21,8 @@ def get_elevenlabs_audio(text, voice_id="JBFqnCBsd6RMkjVDRZzb"):
         audio_generator = client.text_to_speech.convert(
             text=text,
             voice_id=voice_id,
-model_id="eleven_flash_v2_5",
-output_format="mp3_22050_32" # SPEED HACK 3: Highly compressed MP3 stream
+            model_id="eleven_turbo_v2_5",
+            output_format="mp3_44100_96" # SPEED HACK 3: Highly compressed MP3 stream
         )
         return b"".join(audio_generator)
     except Exception as e:
