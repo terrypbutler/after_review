@@ -4,6 +4,7 @@ import time
 from PIL import Image
 import pypdf
 import docx
+from config import ANALYSIS_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 
@@ -174,7 +175,7 @@ def render_stress_tester(df, cohort, subject="General"):
             * Ensure the focus_group contains exactly 4 distinct students selected out of the class list.
             """
 
-            model = genai.GenerativeModel('gemini-2.5-pro')
+            model = genai.GenerativeModel(ANALYSIS_MODEL)
             contents = [system_prompt]
             if image_parts:
                 contents.extend(image_parts)
