@@ -10,6 +10,169 @@ from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.photo_utils import display_student_photo
 
+_AFL_DISCUSSION_KEY = "afl_discussion"
+_AFL_STARTED_INTERACTIONS_KEY = "afl_started_interactions"
+_AFL_EXIT_ANSWERS_KEY = "afl_exit_answers"
+
+
+def _ensure_afl_state():
+    if _AFL_DISCUSSION_KEY not in st.session_state:
+        st.session_state[_AFL_DISCUSSION_KEY] = []
+    if _AFL_STARTED_INTERACTIONS_KEY not in st.session_state:
+        st.session_state[_AFL_STARTED_INTERACTIONS_KEY] = []
+    if _AFL_EXIT_ANSWERS_KEY not in st.session_state:
+        st.session_state[_AFL_EXIT_ANSWERS_KEY] = None
+
+
+def _append_afl_comment(role, speaker, content, source="spoken", marker=None):
+    """Add one contribution to the shared AfL discussion."""
+    _ensure_afl_state()
+    clean_content = str(content).strip()
+    if not clean_content:
+        return False
+
+    if marker and any(
+        entry.get("marker") == marker
+        for entry in st.session_state[_AFL_DISCUSSION_KEY]
+    ):
+        return False
+
+    st.session_state[_AFL_DISCUSSION_KEY].append(
+        {
+            "role": role,
+            "speaker": str(speaker).strip() or ("Teacher" if role == "teacher" else "Student"),
+            "content": clean_content,
+            "source": source,
+            "marker": marker,
+        }
+    )
+    return True
+
+
+def _record_opening_question(teacher_name, teacher_question):
+    clean_question = str(teacher_question).strip()
+    return _append_afl_comment(
+        "teacher",
+        teacher_name,
+        clean_question,
+        marker=f"opening-question::{clean_question}",
+    )
+
+
+def build_afl_transcript(comments):
+    """Return a speaker-labelled transcript for Gemini's shared class memory."""
+    transcript_lines = []
+    for comment in comments:
+        role = comment.get("role", "student")
+        speaker = comment.get("speaker") or ("Teacher" if role == "teacher" else "Student")
+        source = comment.get("source", "spoken")
+        source_label = " [written answer]" if source == "whiteboard" else ""
+        transcript_lines.append(f"{speaker}{source_label}: {comment.get('content', '')}")
+    return "\n".join(transcript_lines)
+
+
+def _afl_transcript():
+    _ensure_afl_state()
+    return build_afl_transcript(st.session_state[_AFL_DISCUSSION_KEY])
+
+
+def _render_afl_discussion():
+    _ensure_afl_state()
+    comments = st.session_state[_AFL_DISCUSSION_KEY]
+
+    st.markdown("### 💬 Remembered class discussion")
+    st.caption(
+        "Every contribution is remembered across students and questioning strategies. "
+        "Invite another student to agree, challenge or improve an earlier answer."
+    )
+
+    if not comments:
+        st.info("The discussion will appear here after the first student responds.")
+        return
+
+    with st.container(border=True):
+        for comment in comments:
+            message_type = "user" if comment.get("role") == "teacher" else "assistant"
+            speaker = comment.get("speaker", "Student")
+            source_label = " · whiteboard" if comment.get("source") == "whiteboard" else ""
+            message_text = str(comment.get("content", "")).replace("\n", "\n\n")
+            with st.chat_message(message_type):
+                st.markdown(f"**{speaker}{source_label}:** {message_text}")
+
+
+def _interaction_token(strategy, target_name, teacher_question):
+    return f"{strategy}::{target_name}::{str(teacher_question).strip()}"
+
+
+def _interaction_started(token):
+    _ensure_afl_state()
+    return token in st.session_state[_AFL_STARTED_INTERACTIONS_KEY]
+
+
+def _mark_interaction_started(token):
+    _ensure_afl_state()
+    if token not in st.session_state[_AFL_STARTED_INTERACTIONS_KEY]:
+        st.session_state[_AFL_STARTED_INTERACTIONS_KEY].append(token)
+
+
+def _reset_academic_afl_state():
+    """Start a completely new AfL activity while preserving voice preference."""
+    reset_keys = {
+        _AFL_DISCUSSION_KEY,
+        _AFL_STARTED_INTERACTIONS_KEY,
+        _AFL_EXIT_ANSWERS_KEY,
+        "wb_answers",
+        "wb_probe_selected",
+        "hu_volunteers",
+        "hu_selected",
+        "latest_audio",
+        "afl_teacher_question",
+        "afl_resource_upload",
+        "afl_strategy",
+        "afl_cold_call_student",
+    }
+    for key in list(st.session_state.keys()):
+        if key in reset_keys or str(key).startswith("probe_chat_"):
+            del st.session_state[key]
+
+
+def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_name):
+    """Generate a student's response using the whole remembered class discussion."""
+    target_grade = get_flexible_text(target_row, ["Projected Grade", "Predicted Grade"])
+    target_sen = get_flexible_text(target_row, ["SEN Status", "SEND Status"])
+    transcript = _afl_transcript()
+
+    chat_prompt = f"""
+    You are roleplaying as {target_name}, a {cohort} student. Target Grade: {target_grade}, SEN: {target_sen}.
+    The subject is {subject}. The teacher's name/title is {teacher_name}.
+
+    This is the whole-class discussion so far. It includes comments from the teacher
+    and potentially several different students:
+    {transcript}
+
+    CRITICAL RULES:
+    1. Respond as {target_name} to the teacher's latest comment or instruction. Keep it brief (1-2 sentences).
+    2. Remember every earlier contribution. If asked about another student's answer,
+       explicitly agree, disagree, correct, extend or improve it in a realistic way.
+    3. Do not claim that another student's comment was your own.
+    4. Match the student's likely attainment and needs; do not automatically make every answer correct.
+    5. Determine the student's current emotion. Pick ONE:
+       [neutral, angry, defensive, sad, bored, hesitant, excited, eager].
+    6. Return a raw JSON object with exactly two keys: "dialogue" and "emotion".
+
+    Example:
+    {{"dialogue": "I agree with Alex about the first step, but I think we divide by 2 next, {teacher_name}.", "emotion": "hesitant"}}
+    """
+
+    model = genai.GenerativeModel(REACTION_MODEL)
+    response = model.generate_content(
+        chat_prompt,
+        generation_config={"response_mime_type": "application/json"},
+    )
+    ai_data = json.loads(response.text)
+    return ai_data.get("dialogue", "..."), ai_data.get("emotion", "neutral")
+
+
 def get_elevenlabs_audio(text, voice_id="JBFqnCBsd6RMkjVDRZzb"):
     api_key = get_secret("ELEVENLABS_API_KEY")
     if not api_key:
@@ -40,7 +203,17 @@ def get_flexible_text(row, possible_names, default="None recorded"):
                 return val
     return default
 
-def fetch_ai_answers(question, student_subset, instructions, uploaded_file, cohort, subject, teacher_name, is_written=False):
+def fetch_ai_answers(
+    question,
+    student_subset,
+    instructions,
+    uploaded_file,
+    cohort,
+    subject,
+    teacher_name,
+    is_written=False,
+    discussion_history="",
+):
     age_context = "11 to 12 years old" if cohort == "Year 7" else "14 to 15 years old"
     
     profiles = []
@@ -70,6 +243,9 @@ def fetch_ai_answers(question, student_subset, instructions, uploaded_file, coho
     {profiles_text}
     
     {instructions}
+
+    Remembered whole-class discussion:
+    {discussion_history or "No students have contributed yet."}
     
     CRITICAL PEDAGOGICAL CONSTRAINTS:
     1. Ability Match: Scale vocabulary, accuracy, length, and depth to their Target Grade and KS2/SATs scores. 
@@ -169,13 +345,24 @@ def create_printable_worksheet(question, answers, df, subject, cohort):
     return "\n".join(html)
 
 def render_academic_responses(df, cohort, subject="General"):
+    _ensure_afl_state()
+
     # --- HEADER & MASTER TOGGLE ---
-    col_header1, col_header2 = st.columns([3, 1])
+    col_header1, col_header2, col_header3 = st.columns([3, 1, 1.35])
     with col_header1:
         st.subheader(f"🎓 AfL Simulator: {subject} Questioning")
     with col_header2:
         # Master Voice Toggle for the AfL Tab
         enable_voice = st.toggle("🔊 Voice Audio", value=True, key="afl_voice_toggle")
+    with col_header3:
+        if st.button(
+            "🔄 Refresh session",
+            key="afl_refresh_session",
+            help="Clear the opening question, student answers and every remembered comment.",
+            width="stretch",
+        ):
+            _reset_academic_afl_state()
+            st.rerun()
         
     api_key = get_secret("GEMINI_API_KEY")
     if not api_key:
@@ -188,9 +375,20 @@ def render_academic_responses(df, cohort, subject="General"):
 
     # --- 1. THE INPUT AREA ---
     st.markdown("### 1. Present the Material")
-    teacher_name = st.text_input("Your Title/Name (e.g., Mr. Smith, Miss, Sir):", value="Sir")
-    teacher_question = st.text_area("Ask the class your opening question:")
-    uploaded_file = st.file_uploader("Upload a resource (optional)", type=['png', 'jpg', 'jpeg'])
+    teacher_name = st.text_input(
+        "Your Title/Name (e.g., Mr. Smith, Miss, Sir):",
+        value="Sir",
+        key="afl_teacher_name",
+    )
+    teacher_question = st.text_area(
+        "Ask the class your opening question:",
+        key="afl_teacher_question",
+    )
+    uploaded_file = st.file_uploader(
+        "Upload a resource (optional)",
+        type=['png', 'jpg', 'jpeg'],
+        key="afl_resource_upload",
+    )
     
     if uploaded_file is not None:
         st.image(uploaded_file, caption="Class Resource", width="stretch")
@@ -203,13 +401,18 @@ def render_academic_responses(df, cohort, subject="General"):
         "🚪 Exit Tickets (Detailed)", 
         "🙋 Hands Up (Volunteers)", 
         "🎯 Cold Call (Interactive Probing)"
-    ], horizontal=True, label_visibility="collapsed")
+    ], horizontal=True, label_visibility="collapsed", key="afl_strategy")
     
     st.markdown("---")
     
     if not teacher_question:
+        if st.session_state[_AFL_DISCUSSION_KEY]:
+            _render_afl_discussion()
         st.info("👆 Please type an opening question above to begin.")
         return
+
+    _render_afl_discussion()
+    st.markdown("---")
 
     # --- MODE: MINI-WHITEBOARDS ---
     if mode == "📝 Mini-Whiteboards (Whole Class)":
@@ -218,14 +421,20 @@ def render_academic_responses(df, cohort, subject="General"):
         if st.session_state.wb_probe_selected:
             target_name = st.session_state.wb_probe_selected
             st.markdown(f"### 🗣️ Probing {target_name}'s Whiteboard Answer")
-            
-            chat_key = f"probe_chat_{target_name}"
-            
+
+            raw_ans = st.session_state.wb_answers.get(target_name, "?")
+            _record_opening_question(teacher_name, teacher_question)
+            _append_afl_comment(
+                "student",
+                target_name,
+                raw_ans,
+                source="whiteboard",
+                marker=f"whiteboard::{teacher_question.strip()}::{target_name}",
+            )
+
             col_a, col_b = st.columns([1, 4])
             with col_a:
                 display_student_photo(target_name, cohort)
-                
-                raw_ans = st.session_state.wb_answers.get(target_name, "?")
                 md_ans = str(raw_ans).replace("\n", "\n\n")
                 
                 with st.container(border=True):
@@ -239,51 +448,29 @@ def render_academic_responses(df, cohort, subject="General"):
                 if "latest_audio" in st.session_state:
                     st.audio(st.session_state["latest_audio"], format="audio/mp3", autoplay=True)
                     del st.session_state["latest_audio"]
-                    
-                for msg in st.session_state[chat_key]:
-                    msg_text = str(msg["content"]).replace("\n", "\n\n")
-                    if msg["role"] == "teacher":
-                        with st.chat_message("user"): st.markdown(msg_text)
-                    else:
-                        with st.chat_message("assistant"): st.markdown(msg_text)
-                        
-                follow_up = st.chat_input(f"Ask {target_name} about their whiteboard answer...")
+
+                st.caption(
+                    f"{target_name} can hear the remembered class discussion, including "
+                    "other students' answers."
+                )
+                follow_up = st.chat_input(
+                    f"Ask {target_name} to explain, comment on or improve an answer..."
+                )
                 if follow_up:
-                    st.session_state[chat_key].append({"role": "teacher", "content": follow_up})
-                    with st.chat_message("user"): st.markdown(follow_up)
+                    _append_afl_comment("teacher", teacher_name, follow_up)
                     
                     with st.spinner(f"{target_name} is reacting..."):
                         target_row = df[df["Full Name"] == target_name].iloc[0]
-                        target_grade = get_flexible_text(target_row, ["Projected Grade", "Predicted Grade"])
-                        target_sen = get_flexible_text(target_row, ["SEN Status", "SEND Status"])
-                        
-                        transcript = "\n".join([f"{'Teacher' if m['role']=='teacher' else 'Student'}: {m['content']}" for m in st.session_state[chat_key]])
-                        
-                        chat_prompt = f"""
-                        You are roleplaying as {target_name}, a {cohort} student. Target Grade: {target_grade}, SEN: {target_sen}.
-                        The subject is {subject}. The teacher's name/title is {teacher_name}.
-                        
-                        Here is the conversation so far. Note that your first response was a written answer on a mini-whiteboard:
-                        {transcript}
-                        
-                        CRITICAL RULES:
-                        1. Respond verbally to the teacher's last question as {target_name}. Keep it brief. 
-                        2. Determine the student's current emotion based on the scenario and teacher's prompt. Pick ONE: [neutral, angry, defensive, sad, bored, hesitant, excited, eager].
-                        3. You MUST return your response as a raw JSON object with two keys: "dialogue" and "emotion".
-                        
-                        Example Format:
-                        {{"dialogue": "I think it's 4, {teacher_name}", "emotion": "hesitant"}}
-                        """
-                        
+
                         try:
-                            model = genai.GenerativeModel(REACTION_MODEL)
-                            response = model.generate_content(chat_prompt, generation_config={"response_mime_type": "application/json"})
-                            
-                            ai_data = json.loads(response.text)
-                            reply_text = ai_data.get("dialogue", "...")
-                            current_emotion = ai_data.get("emotion", "neutral")
-                            
-                            st.session_state[chat_key].append({"role": "student", "content": reply_text})
+                            reply_text, current_emotion = generate_discussion_reply(
+                                target_name,
+                                target_row,
+                                cohort,
+                                subject,
+                                teacher_name,
+                            )
+                            _append_afl_comment("student", target_name, reply_text)
                             st.toast(f"Student Mood: {current_emotion.upper()} 🎭")
                             
                             if enable_voice:
@@ -314,10 +501,6 @@ def render_academic_responses(df, cohort, subject="General"):
                         st.session_state.wb_answers = answers
                         st.rerun()
             else:
-                if st.button("🔄 Clear Whiteboards", type="secondary"):
-                    st.session_state.wb_answers = None
-                    st.rerun()
-                    
                 st.markdown("---")
                 num_cols = 5
                 for i in range(0, len(df), num_cols):
@@ -335,19 +518,27 @@ def render_academic_responses(df, cohort, subject="General"):
                                 st.markdown(f"<div style='text-align: center; font-size: 1.4rem; padding: 15px 0;'>\n\n{md_ans}\n\n</div>", unsafe_allow_html=True)
                             
                             if st.button(f"🗣️ Probe", key=f"probe_{name}", width="stretch"):
+                                _record_opening_question(teacher_name, teacher_question)
+                                _append_afl_comment(
+                                    "student",
+                                    name,
+                                    raw_ans,
+                                    source="whiteboard",
+                                    marker=f"whiteboard::{teacher_question.strip()}::{name}",
+                                )
                                 st.session_state.wb_probe_selected = name
-                                chat_key = f"probe_chat_{name}"
-                                st.session_state[chat_key] = [
-                                    {"role": "teacher", "content": teacher_question},
-                                    {"role": "student", "content": f"[Wrote on whiteboard]: {raw_ans}"}
-                                ]
                                 st.rerun()
 
     # --- MODE: EXIT TICKETS ---
     elif mode == "🚪 Exit Tickets (Detailed)":
-        st.caption("Collects a detailed paragraph from every single student in the class.")
-        if st.button("Collect Exit Tickets", type="primary"):
-            with st.spinner("Students are writing their work (this may take a moment for a full class on the Pro model)..."):
+        st.caption(
+            "Collects a detailed paragraph from every student. Tickets remain available "
+            "until you refresh the AfL session."
+        )
+        saved_ticket_set = st.session_state[_AFL_EXIT_ANSWERS_KEY]
+
+        if saved_ticket_set is None and st.button("Collect Exit Tickets", type="primary"):
+            with st.spinner("Students are writing their work (this may take a moment for a full class)..."):
                 
                 instructions = (
                     "Write EXACTLY what the student would write in their exercise book. "
@@ -360,29 +551,53 @@ def render_academic_responses(df, cohort, subject="General"):
                 
                 answers = fetch_ai_answers(teacher_question, df, instructions, uploaded_file, cohort, subject, teacher_name, is_written=True)
                 
-                if answers: 
-                    st.success("✅ All exit tickets collected!")
-                    html_worksheet = create_printable_worksheet(teacher_question, answers, df, subject, cohort)
-                    st.download_button(
-                        label="🖨️ Download as Printable Worksheet",
-                        data=html_worksheet,
-                        file_name=f"{cohort}_{subject}_Full_Class_Marking_Exercise.html",
-                        mime="text/html",
-                        help="Downloads a perfectly formatted file. Open it in your browser and press Ctrl+P to print!",
-                        type="secondary",
-                        width="stretch"
-                    )
-                    st.markdown("---")
-                    st.markdown(f"### 📑 On-Screen Preview (Full Class)")
-                    for _, row in df.iterrows():
-                        name = row.get("Full Name")
-                        raw_ans = answers.get(name, "No ticket submitted.")
-                        st_ans = str(raw_ans).replace("\n", "\n\n")
-                        
-                        with st.expander(f"🎫 {name}'s Ticket"):
-                            col1, col2 = st.columns([1, 5])
-                            with col1: display_student_photo(name, cohort)
-                            with col2: st.markdown(st_ans)
+                if answers:
+                    st.session_state[_AFL_EXIT_ANSWERS_KEY] = {
+                        "question": teacher_question,
+                        "answers": answers,
+                        "subject": subject,
+                        "cohort": cohort,
+                    }
+                    _record_opening_question(teacher_name, teacher_question)
+                    st.rerun()
+
+        saved_ticket_set = st.session_state[_AFL_EXIT_ANSWERS_KEY]
+        if saved_ticket_set:
+            saved_question = saved_ticket_set["question"]
+            answers = saved_ticket_set["answers"]
+            saved_subject = saved_ticket_set["subject"]
+            saved_cohort = saved_ticket_set["cohort"]
+
+            st.success("✅ Exit tickets remembered until the AfL session is refreshed.")
+            html_worksheet = create_printable_worksheet(
+                saved_question,
+                answers,
+                df,
+                saved_subject,
+                saved_cohort,
+            )
+            st.download_button(
+                label="🖨️ Download as Printable Worksheet",
+                data=html_worksheet,
+                file_name=f"{saved_cohort}_{saved_subject}_Full_Class_Marking_Exercise.html",
+                mime="text/html",
+                help="Downloads a formatted file. Open it in your browser and press Ctrl+P to print.",
+                type="secondary",
+                width="stretch",
+            )
+            st.markdown("---")
+            st.markdown("### 📑 On-Screen Preview (Full Class)")
+            for _, row in df.iterrows():
+                name = row.get("Full Name")
+                raw_ans = answers.get(name, "No ticket submitted.")
+                st_ans = str(raw_ans).replace("\n", "\n\n")
+
+                with st.expander(f"🎫 {name}'s Ticket"):
+                    col1, col2 = st.columns([1, 5])
+                    with col1:
+                        display_student_photo(name, saved_cohort)
+                    with col2:
+                        st.markdown(st_ans)
 
     # --- MODE: HANDS UP ---
     elif mode == "🙋 Hands Up (Volunteers)":
@@ -394,9 +609,11 @@ def render_academic_responses(df, cohort, subject="General"):
         col1, col2 = st.columns([1, 4])
         with col1:
             if st.button("🙋 Ask for Volunteers", type="primary", width="stretch"):
-                num_vols = random.randint(3, min(10, len(df)))
-                vol_df = df.sample(n=num_vols)
-                st.session_state.hu_volunteers = vol_df["Full Name"].tolist()
+                max_volunteers = min(10, len(df))
+                min_volunteers = min(3, max_volunteers)
+                num_volunteers = random.randint(min_volunteers, max_volunteers)
+                volunteer_df = df.sample(n=num_volunteers)
+                st.session_state.hu_volunteers = volunteer_df["Full Name"].tolist()
                 st.session_state.hu_selected = None
                 st.rerun()
             if st.button("🔄 Clear Hands", width="stretch"):
@@ -422,9 +639,11 @@ def render_academic_responses(df, cohort, subject="General"):
         elif st.session_state.hu_selected:
             target_name = st.session_state.hu_selected
             st.markdown(f"### 🗣️ You called on {target_name}")
-
-            chat_key = f"probe_chat_{target_name}"
-            if chat_key not in st.session_state: st.session_state[chat_key] = []
+            interaction_token = _interaction_token(
+                "hands-up",
+                target_name,
+                teacher_question,
+            )
 
             col_a, col_b = st.columns([1, 4])
             with col_a:
@@ -437,20 +656,36 @@ def render_academic_responses(df, cohort, subject="General"):
                 if "latest_audio" in st.session_state:
                     st.audio(st.session_state["latest_audio"], format="audio/mp3", autoplay=True)
                     del st.session_state["latest_audio"]
-                    
-                if len(st.session_state[chat_key]) == 0:
+
+                if not _interaction_started(interaction_token):
                     with st.spinner(f"Waiting for {target_name} to respond..."):
+                        _record_opening_question(teacher_name, teacher_question)
                         target_df = df[df["Full Name"] == target_name]
-                        instructions = "Generate a spoken answer. They volunteered, so they feel confident, but may confidently share a misconception. No commentary."
-                        answers = fetch_ai_answers(teacher_question, target_df, instructions, uploaded_file, cohort, subject, teacher_name)
+                        instructions = (
+                            "Generate a spoken answer. They volunteered, so they feel "
+                            "confident, but may confidently share a misconception. If "
+                            "classmates have already contributed, naturally agree, challenge "
+                            "or improve a relevant point rather than simply repeating it. "
+                            "No commentary."
+                        )
+                        answers = fetch_ai_answers(
+                            teacher_question,
+                            target_df,
+                            instructions,
+                            uploaded_file,
+                            cohort,
+                            subject,
+                            teacher_name,
+                            discussion_history=_afl_transcript(),
+                        )
 
                         if answers:
                             student_reply = answers.get(target_name, "...")
-                            st.session_state[chat_key].append({"role": "teacher", "content": teacher_question})
-                            st.session_state[chat_key].append({"role": "student", "content": student_reply})
-                            
+                            _append_afl_comment("student", target_name, student_reply)
+                            _mark_interaction_started(interaction_token)
+
                             target_row = df[df["Full Name"] == target_name].iloc[0]
-                            
+
                             if enable_voice:
                                 student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
                                 audio_bytes = get_elevenlabs_audio(student_reply, student_voice_id)
@@ -459,50 +694,28 @@ def render_academic_responses(df, cohort, subject="General"):
                                     
                             st.rerun()
                 else:
-                    for msg in st.session_state[chat_key]:
-                        msg_text = str(msg["content"]).replace("\n", "\n\n")
-                        if msg["role"] == "teacher":
-                            with st.chat_message("user"): st.markdown(msg_text)
-                        else:
-                            with st.chat_message("assistant"): st.markdown(msg_text)
-
-                    follow_up = st.chat_input(f"Probe {target_name} deeper...")
+                    st.caption(
+                        f"Pick someone else to let them respond to {target_name}, or ask "
+                        f"{target_name} to revisit any remembered answer."
+                    )
+                    follow_up = st.chat_input(
+                        f"Ask {target_name} to explain, challenge or improve an answer..."
+                    )
                     if follow_up:
-                        st.session_state[chat_key].append({"role": "teacher", "content": follow_up})
-                        with st.chat_message("user"): st.markdown(follow_up)
+                        _append_afl_comment("teacher", teacher_name, follow_up)
                         
                         with st.spinner(f"{target_name} is reacting..."):
                             target_row = df[df["Full Name"] == target_name].iloc[0]
-                            target_grade = get_flexible_text(target_row, ["Projected Grade", "Predicted Grade"])
-                            target_sen = get_flexible_text(target_row, ["SEN Status", "SEND Status"])
-                            
-                            transcript = "\n".join([f"{'Teacher' if m['role']=='teacher' else 'Student'}: {m['content']}" for m in st.session_state[chat_key]])
 
-                            chat_prompt = f"""
-                            You are roleplaying as {target_name}, a {cohort} student. Target Grade: {target_grade}, SEN: {target_sen}.
-                            The subject is {subject}. The teacher's name/title is {teacher_name}.
-
-                            Here is the conversation so far:
-                            {transcript}
-
-                            CRITICAL RULES:
-                            1. Respond to the teacher's last question as {target_name}. Keep it brief (1-2 sentences). 
-                            2. Determine the student's current emotion based on the scenario and teacher's prompt. Pick ONE: [neutral, angry, defensive, sad, bored, hesitant, excited, eager].
-                            3. You MUST return your response as a raw JSON object with two keys: "dialogue" and "emotion".
-                            
-                            Example Format:
-                            {{"dialogue": "I think it's 4, {teacher_name}", "emotion": "hesitant"}}
-                            """
-                            
                             try:
-                                model = genai.GenerativeModel(REACTION_MODEL)
-                                response = model.generate_content(chat_prompt, generation_config={"response_mime_type": "application/json"})
-                                
-                                ai_data = json.loads(response.text)
-                                reply_text = ai_data.get("dialogue", "...")
-                                current_emotion = ai_data.get("emotion", "neutral")
-                                
-                                st.session_state[chat_key].append({"role": "student", "content": reply_text})
+                                reply_text, current_emotion = generate_discussion_reply(
+                                    target_name,
+                                    target_row,
+                                    cohort,
+                                    subject,
+                                    teacher_name,
+                                )
+                                _append_afl_comment("student", target_name, reply_text)
                                 st.toast(f"Student Mood: {current_emotion.upper()} 🎭")
                                 
                                 if enable_voice:
@@ -512,43 +725,70 @@ def render_academic_responses(df, cohort, subject="General"):
                                         st.session_state["latest_audio"] = audio_bytes
                                         
                                 st.rerun()
-                            except Exception as e:
-                                st.error("Failed to generate response.")
+                            except Exception as exc:
+                                st.error(f"Failed to generate response: {exc}")
 
     # --- MODE: COLD CALL (INTERACTIVE PROBING) ---
     elif mode == "🎯 Cold Call (Interactive Probing)":
-        st.caption("Put a student on the spot, listen to their answer, and ask follow-up questions to probe their understanding.")
-        target_name = st.selectbox("Select student to Cold Call:", df["Full Name"].tolist())
-        
-        chat_key = f"probe_chat_{target_name}"
-        if chat_key not in st.session_state: st.session_state[chat_key] = []
+        st.caption(
+            "Choose different students in turn. Each student hears the full remembered "
+            "discussion and can respond to or improve a classmate's answer."
+        )
+        target_name = st.selectbox(
+            "Select student to Cold Call:",
+            df["Full Name"].tolist(),
+            key="afl_cold_call_student",
+        )
+        interaction_token = _interaction_token(
+            "cold-call",
+            target_name,
+            teacher_question,
+        )
             
         col1, col2 = st.columns([1, 4])
         with col1:
             display_student_photo(target_name, cohort)
-            if st.button("🔄 Reset Chat", width="stretch"):
-                st.session_state[chat_key] = []
-                st.rerun()
+            st.caption("Change the student above without losing any comments.")
                 
         with col2:
             if "latest_audio" in st.session_state:
                 st.audio(st.session_state["latest_audio"], format="audio/mp3", autoplay=True)
                 del st.session_state["latest_audio"]
                 
-            if len(st.session_state[chat_key]) == 0:
-                if st.button(f"🗣️ Ask {target_name} the opening question", type="primary"):
+            if not _interaction_started(interaction_token):
+                button_label = (
+                    f"🗣️ Invite {target_name} into the discussion"
+                    if st.session_state[_AFL_DISCUSSION_KEY]
+                    else f"🗣️ Ask {target_name} the opening question"
+                )
+                if st.button(button_label, type="primary"):
                     with st.spinner(f"Waiting for {target_name} to respond..."):
+                        _record_opening_question(teacher_name, teacher_question)
                         target_df = df[df["Full Name"] == target_name]
-                        instructions = "Generate a spoken answer based on their profile. Include hesitation or filler words ('Umm') if appropriate. NO commentary."
-                        answers = fetch_ai_answers(teacher_question, target_df, instructions, uploaded_file, cohort, subject, teacher_name)
+                        instructions = (
+                            "Generate a spoken answer based on their profile. Include "
+                            "hesitation or filler words ('Umm') if appropriate. If classmates "
+                            "have already contributed, respond to a relevant idea by agreeing, "
+                            "challenging, correcting or improving it. No commentary."
+                        )
+                        answers = fetch_ai_answers(
+                            teacher_question,
+                            target_df,
+                            instructions,
+                            uploaded_file,
+                            cohort,
+                            subject,
+                            teacher_name,
+                            discussion_history=_afl_transcript(),
+                        )
                         
                         if answers:
                             student_reply = answers.get(target_name, "...")
-                            st.session_state[chat_key].append({"role": "teacher", "content": teacher_question})
-                            st.session_state[chat_key].append({"role": "student", "content": student_reply})
-                            
+                            _append_afl_comment("student", target_name, student_reply)
+                            _mark_interaction_started(interaction_token)
+
                             target_row = df[df["Full Name"] == target_name].iloc[0]
-                            
+
                             if enable_voice:
                                 student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
                                 audio_bytes = get_elevenlabs_audio(student_reply, student_voice_id)
@@ -557,50 +797,24 @@ def render_academic_responses(df, cohort, subject="General"):
                                     
                             st.rerun()
             else:
-                for msg in st.session_state[chat_key]:
-                    msg_text = str(msg["content"]).replace("\n", "\n\n")
-                    if msg["role"] == "teacher":
-                        with st.chat_message("user"): st.markdown(msg_text)
-                    else:
-                        with st.chat_message("assistant"): st.markdown(msg_text)
-                        
-                follow_up = st.chat_input(f"Probe {target_name} deeper...")
+                follow_up = st.chat_input(
+                    f"Ask {target_name} to explain, challenge or improve an answer..."
+                )
                 if follow_up:
-                    st.session_state[chat_key].append({"role": "teacher", "content": follow_up})
-                    with st.chat_message("user"): st.markdown(follow_up)
+                    _append_afl_comment("teacher", teacher_name, follow_up)
                     
                     with st.spinner(f"{target_name} is reacting..."):
                         target_row = df[df["Full Name"] == target_name].iloc[0]
-                        target_grade = get_flexible_text(target_row, ["Projected Grade", "Predicted Grade"])
-                        target_sen = get_flexible_text(target_row, ["SEN Status", "SEND Status"])
-                        
-                        transcript = "\n".join([f"{'Teacher' if m['role']=='teacher' else 'Student'}: {m['content']}" for m in st.session_state[chat_key]])
-                        
-                        chat_prompt = f"""
-                        You are roleplaying as {target_name}, a {cohort} student. Target Grade: {target_grade}, SEN: {target_sen}.
-                        The subject is {subject}. The teacher's name/title is {teacher_name}.
-                        
-                        Here is the conversation so far:
-                        {transcript}
-                        
-                        CRITICAL RULES:
-                        1. Respond to the teacher's last question as {target_name}. Keep it brief. 
-                        2. Determine the student's current emotion based on the scenario and teacher's prompt. Pick ONE: [neutral, angry, defensive, sad, bored, hesitant, excited, eager].
-                        3. You MUST return your response as a raw JSON object with two keys: "dialogue" and "emotion".
-                        
-                        Example Format:
-                        {{"dialogue": "I think it's 4, {teacher_name}", "emotion": "hesitant"}}
-                        """
-                        
+
                         try:
-                            model = genai.GenerativeModel(REACTION_MODEL)
-                            response = model.generate_content(chat_prompt, generation_config={"response_mime_type": "application/json"})
-                            
-                            ai_data = json.loads(response.text)
-                            reply_text = ai_data.get("dialogue", "...")
-                            current_emotion = ai_data.get("emotion", "neutral")
-                            
-                            st.session_state[chat_key].append({"role": "student", "content": reply_text})
+                            reply_text, current_emotion = generate_discussion_reply(
+                                target_name,
+                                target_row,
+                                cohort,
+                                subject,
+                                teacher_name,
+                            )
+                            _append_afl_comment("student", target_name, reply_text)
                             st.toast(f"Student Mood: {current_emotion.upper()} 🎭")
                             
                             if enable_voice:
@@ -610,5 +824,5 @@ def render_academic_responses(df, cohort, subject="General"):
                                     st.session_state["latest_audio"] = audio_bytes
                                     
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to generate response: {e}")
+                        except Exception as exc:
+                            st.error(f"Failed to generate response: {exc}")
