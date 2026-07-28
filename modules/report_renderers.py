@@ -128,6 +128,7 @@ def render_student_card(
     show_projected=True,
     report_type="None",
     class_df=None,
+    show_relationships=False,
 ):
     name = row.get("Full Name", "Unknown")
     
@@ -170,53 +171,6 @@ def render_student_card(
                 
         with right:
             display_student_photo(name, cohort)
-
-        if class_df is not None and not class_df.empty:
-            class_names = sorted(
-                {
-                    str(value).strip()
-                    for value in class_df.get("Full Name", pd.Series(dtype=str))
-                    if str(value).strip()
-                },
-                key=str.casefold,
-            )
-            class_signature = hashlib.sha1(
-                f"{cohort}|{name}|{'|'.join(class_names)}".encode("utf-8")
-            ).hexdigest()[:12]
-            result_key = f"working_group_result_{class_signature}"
-
-            st.markdown("#### 👥 Working group")
-            if st.button(
-                "Suggest a working group",
-                key=f"working_group_button_{class_signature}",
-                help=(
-                    "Build a group of four from the class currently shown, "
-                    "prioritising preferred peers and excluding pairing concerns."
-                ),
-            ):
-                st.session_state[result_key] = suggest_working_group(
-                    row,
-                    class_df,
-                    group_size=4,
-                )
-
-            if result_key in st.session_state:
-                peers = st.session_state[result_key]
-                if peers:
-                    st.success(
-                        "**Recommended group:** "
-                        + " · ".join([str(name), *peers])
-                    )
-                    st.caption(
-                        "Uses the current filtered class, prioritises recorded "
-                        "working relationships and excludes pairing concerns "
-                        "in either direction."
-                    )
-                else:
-                    st.warning(
-                        "No compatible group is available in the current class "
-                        "selection."
-                    )
 
         st.divider()
         if show_projected:
@@ -286,6 +240,20 @@ def render_student_card(
                 
                 if table_data:
                     st.table(pd.DataFrame(table_data).set_index("Subject"))
+
+        if show_relationships:
+            preferred = get_flexible_text(row, ["Preferred Peers"])
+            concerns = get_flexible_text(row, ["Pairing Considerations"])
+            st.divider()
+            st.markdown("#### 🤝 Student relationships")
+            relationship_columns = st.columns(2)
+            with relationship_columns[0]:
+                st.markdown("**Works well with**")
+                st.write(preferred or "No preferred peers recorded.")
+            with relationship_columns[1]:
+                st.markdown("**Pairing considerations**")
+                st.write(concerns or "No pairing concerns recorded.")
+
 
 def render_photo_grid(df, cohort, num_cols=5):
     if df.empty:
@@ -359,7 +327,13 @@ def get_image_base64(name, cohort):
     return f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def generate_printable_html(df, cohort, report_type, print_selection):
+def generate_printable_html(
+    df,
+    cohort,
+    report_type,
+    print_selection,
+    include_relationships=False,
+):
     """Builds a beautiful, standalone HTML document formatted for A4 printing."""
     html = [
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Student Reports</title><style>",
@@ -460,6 +434,19 @@ def generate_printable_html(df, cohort, report_type, print_selection):
                             sub_pred = get_flexible_text(row, [f"{sub} Predicted Grade"]) if sub.lower() != "science" else (get_flexible_text(row, ["Sci 1 Predicted Grade"]) or "") + ("-" + get_flexible_text(row, ["Sci 2 Predicted Grade"]) if get_flexible_text(row, ["Sci 2 Predicted Grade"]) else "")
                             rows.append(f"<tr><td style='font-weight:bold;'>{escape_html(sub)}</td><td>{escape_html(grade)}</td><td>{escape_html(sub_pred or proj or '')}</td></tr>")
                     if rows: html.append(f"<div class='section-title'>Subject Reports</div><table><tr><th>Subject</th><th>Current Grade</th><th>Predicted Grade</th></tr>{''.join(rows)}</table>")
+
+            if include_relationships:
+                preferred = get_flexible_text(row, ["Preferred Peers"])
+                concerns = get_flexible_text(row, ["Pairing Considerations"])
+                html.append(
+                    "<div class='section-title'>Student Relationships</div>"
+                    "<table>"
+                    "<tr><th style='width:30%;'>Works well with</th>"
+                    f"<td>{escape_html(preferred or 'No preferred peers recorded.')}</td></tr>"
+                    "<tr><th>Pairing considerations</th>"
+                    f"<td>{escape_html(concerns or 'No pairing concerns recorded.')}</td></tr>"
+                    "</table>"
+                )
             html.append("</div>") # End card
             
     html.append("</body></html>")
