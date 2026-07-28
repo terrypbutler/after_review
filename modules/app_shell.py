@@ -18,6 +18,7 @@ NAV_ITEMS = [
     "Simulator",
     "Academic AfL",
     "Lesson Stress-Tester",
+    "Sequence Evaluator",
     "Observe Learning",
 ]
 
@@ -31,6 +32,7 @@ NAV_LABELS = {
     "Simulator": "◉  Student roleplay",
     "Academic AfL": "✓  Academic AfL",
     "Lesson Stress-Tester": "⚡  Lesson stress-test",
+    "Sequence Evaluator": "⇥  Sequence evaluator",
     "Observe Learning": "◎  Observe learning",
 }
 
@@ -300,7 +302,7 @@ def render_home(
     metric_columns = st.columns(4)
     metric_columns[0].metric("Year 7", f"{len(cohorts['Year 7'])} students")
     metric_columns[1].metric("Year 10", f"{len(cohorts['Year 10'])} students")
-    metric_columns[2].metric("Practice tools", "5 modes")
+    metric_columns[2].metric("Practice tools", "6 modes")
     metric_columns[3].metric("Classroom views", "4 views")
 
     for cohort, message in load_errors.items():
@@ -321,8 +323,8 @@ def render_home(
         (
             "02 · PLAN",
             "Shape the lesson",
-            "Build a seating plan and stress-test a lesson against the pupils who will experience it.",
-            "Seating Plan · Lesson Stress-Tester",
+            "Build a seating plan, stress-test one lesson or evaluate how learning develops across a sequence.",
+            "Seating Plan · Lesson Stress-Tester · Sequence Evaluator",
         ),
         (
             "03 · REHEARSE",
