@@ -8,6 +8,12 @@ from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
+from modules.seating_plan_utils import (
+    ensure_suggested_plan,
+    order_dataframe_by_plan,
+    plan_display_columns,
+)
+from modules.ui_components import render_seating_plan_overview
 
 try:
     from modules.academic_responses import get_elevenlabs_audio
@@ -26,11 +32,45 @@ def get_flexible_text(row, possible_names):
     return "None recorded"
 
 def render_observation_room(df, cohort):
+    if "seating_plans" not in st.session_state:
+        st.session_state.seating_plans = {}
+    plan_key, seating_plan, plan_created = ensure_suggested_plan(
+        st.session_state.seating_plans,
+        df,
+        cohort,
+    )
+    previous_context = st.session_state.get("obs_class_context")
+    if previous_context and previous_context != plan_key:
+        reset_keys = {
+            "obs_task",
+            "obs_image",
+            "live_observations",
+            "obs_intervene_target",
+            "obs_active_students",
+            "obs_task_duration",
+            "obs_time_elapsed",
+            "obs_engagement_log",
+            "obs_global_event",
+            "student_states",
+        }
+        for key in list(st.session_state.keys()):
+            if key in reset_keys or str(key).startswith("obs_chat_"):
+                del st.session_state[key]
+    st.session_state.obs_class_context = plan_key
+    df = order_dataframe_by_plan(df, seating_plan)
+
     col_header1, col_header2 = st.columns([3, 1])
     with col_header1:
         st.subheader("👁️ Circulate the Room: Full Class Observation")
     with col_header2:
         enable_voice = st.toggle("🔊 Voice Audio", value=True, key="obs_voice_toggle")
+
+    if plan_created:
+        st.info(
+            "A suggested seating plan was created from the spreadsheet relationship "
+            "data. You can adjust it on the Seating Plan page."
+        )
+    render_seating_plan_overview(seating_plan, df, "Observe Learning")
 
     api_key = get_secret("GEMINI_API_KEY")
     if not api_key:
@@ -51,6 +91,14 @@ def render_observation_room(df, cohort):
     if "obs_global_event" not in st.session_state: st.session_state.obs_global_event = None
     
     if "student_states" not in st.session_state: st.session_state.student_states = {}
+
+    if st.session_state.obs_active_students:
+        active_set = set(st.session_state.obs_active_students)
+        st.session_state.obs_active_students = [
+            name
+            for name in df["Full Name"].tolist()
+            if name in active_set
+        ]
 
     # --- 2. THE 1-ON-1 INTERVENTION VIEW ---
     if st.session_state.obs_intervene_target:
@@ -479,7 +527,7 @@ def render_observation_room(df, cohort):
             st.markdown("---")
             
             # SECTION C: The Student Grid
-            num_cols = 4
+            num_cols = plan_display_columns(seating_plan)
             for i in range(0, len(st.session_state.obs_active_students), num_cols):
                 cols = st.columns(num_cols)
                 for idx, student_name in enumerate(st.session_state.obs_active_students[i : i + num_cols]):
