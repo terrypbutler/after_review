@@ -25,6 +25,7 @@ from modules.ui_components import render_seating_plan_overview
 _AFL_DISCUSSION_KEY = "afl_discussion"
 _AFL_STARTED_INTERACTIONS_KEY = "afl_started_interactions"
 _AFL_EXIT_ANSWERS_KEY = "afl_exit_answers"
+_AFL_PEER_FORMAT_VERSION = "long-conversations-v2"
 
 
 def pcm_segments_to_wav(
@@ -578,6 +579,215 @@ def _format_response_calibration(plans, subject):
     return "\n".join(lines), subject_guidance
 
 
+_DOMINANT_DISCUSSION_TERMS = (
+    "takes control",
+    "takes the lead",
+    "dominant",
+    "monopolis",
+    "interrupt",
+    "answers for others",
+)
+_RELUCTANT_DISCUSSION_TERMS = (
+    "reluctant",
+    "hesitant",
+    "quiet",
+    "withdraw",
+    "listener",
+    "waits to be asked",
+    "avoids contributing",
+    "low confidence",
+)
+_OFF_TASK_DISCUSSION_TERMS = (
+    "off task",
+    "off-task",
+    "distract",
+    "chatty",
+    "side conversation",
+    "loses focus",
+    "lose focus",
+    "needs redirect",
+    "needs re-direction",
+    "low-level disruption",
+    "avoidance",
+    "restless",
+    "silly",
+    "socialis",
+)
+
+
+def _contains_discussion_term(text, terms):
+    clean_text = str(text or "").casefold()
+    return any(term in clean_text for term in terms)
+
+
+def _peer_name_set(value):
+    return {
+        name.strip().casefold()
+        for name in re.split(r"[;,\n]+", str(value or ""))
+        if name.strip()
+    }
+
+
+def build_discussion_dynamics(participant_df, discussion_kind):
+    """Turn spreadsheet behaviour signals into a varied conversation structure."""
+    participant_names = {
+        str(name).strip().casefold()
+        for name in participant_df.get("Full Name", [])
+        if str(name).strip()
+    }
+    pupils = []
+    group_off_task_score = 0
+
+    for _, row in participant_df.iterrows():
+        name = str(row.get("Full Name", "Student")).strip()
+        style = get_flexible_text(
+            row,
+            ["Peer Discussion Style"],
+            default="",
+        )
+        barrier = get_flexible_text(
+            row,
+            ["Typical Learning Barrier", "Learning Barrier"],
+            default="",
+        )
+        participation = _bounded_metric(row, ["Participation Level"])
+        confidence = _bounded_metric(row, ["Academic Confidence"])
+        independence = _bounded_metric(row, ["Independence"])
+
+        combined_behaviour = f"{style} | {barrier}"
+        explicitly_dominant = _contains_discussion_term(
+            combined_behaviour,
+            _DOMINANT_DISCUSSION_TERMS,
+        )
+        explicitly_reluctant = _contains_discussion_term(
+            combined_behaviour,
+            _RELUCTANT_DISCUSSION_TERMS,
+        )
+
+        if explicitly_dominant or (
+            participation is not None
+            and confidence is not None
+            and participation >= 88
+            and confidence >= 80
+            and (independence is None or independence < 60)
+        ):
+            pattern = "monopolises"
+            guidance = (
+                "Take substantially more airtime than the others. Return repeatedly, "
+                "steer the discussion, interrupt or answer for someone where natural. "
+                "This does not make the pupil automatically correct."
+            )
+        elif explicitly_reluctant or (
+            (participation is not None and participation <= 30)
+            or (confidence is not None and confidence <= 28)
+        ):
+            pattern = "reluctant"
+            guidance = (
+                "Be reluctant to share. Initially defer, give a fragment, say 'you go', "
+                "or need a direct invitation. Contribute only one or two short turns and "
+                "do not suddenly become fluent."
+            )
+        else:
+            pattern = "balanced"
+            guidance = (
+                "Contribute naturally without equal-turn choreography. Respond to a peer, "
+                "and speak again only when the discussion gives a reason."
+            )
+
+        preferred_peers = _peer_name_set(
+            get_flexible_text(row, ["Preferred Peers"], default="")
+        )
+        seated_with_preferred_peer = bool(
+            (preferred_peers & participant_names) - {name.casefold()}
+        )
+        explicit_off_task = _contains_discussion_term(
+            combined_behaviour,
+            _OFF_TASK_DISCUSSION_TERMS,
+        )
+
+        pupil_off_task_score = 0
+        if explicit_off_task:
+            pupil_off_task_score += 4
+        if independence is not None and independence < 38:
+            pupil_off_task_score += 2
+        if seated_with_preferred_peer:
+            pupil_off_task_score += 1
+        if pattern == "monopolises" and participation is not None and participation >= 80:
+            pupil_off_task_score += 1
+        group_off_task_score = max(group_off_task_score, pupil_off_task_score)
+
+        signal_parts = []
+        if style:
+            signal_parts.append(f"recorded style: {style}")
+        for label, value in (
+            ("participation", participation),
+            ("confidence", confidence),
+            ("independence", independence),
+        ):
+            if value is not None:
+                signal_parts.append(f"{label} {value:.0f}/100")
+        if seated_with_preferred_peer:
+            signal_parts.append("seated with a preferred peer")
+
+        pupils.append(
+            {
+                "name": name,
+                "pattern": pattern,
+                "guidance": guidance,
+                "signals": "; ".join(signal_parts) or "no strong discussion signal",
+            }
+        )
+
+    if group_off_task_score >= 4:
+        off_task_level = "likely"
+        off_task_guidance = (
+            "Include one to three brief, harmless off-task turns. Use ordinary school "
+            "small talk or an interest already present in the compact profile; never use "
+            "safeguarding or sensitive home information. Show a believable attempt to "
+            "return to the task, but the group need not reach a polished conclusion."
+        )
+    elif group_off_task_score >= 2:
+        off_task_level = "possible"
+        off_task_guidance = (
+            "Include one short, harmless off-task detour before a pupil redirects the "
+            "conversation. Do not use private home or safeguarding information."
+        )
+    else:
+        off_task_level = "unlikely"
+        off_task_guidance = (
+            "Keep this exchange on task; do not force an off-task interlude when the "
+            "spreadsheet behaviour signals do not support one."
+        )
+
+    is_pair = discussion_kind == "turn_and_talk"
+    minimum_turns = 5 if is_pair else 7
+    maximum_turns = 12 if is_pair else 16
+    if any(pupil["pattern"] == "monopolises" for pupil in pupils):
+        maximum_turns += 2
+    if off_task_level == "likely":
+        maximum_turns += 2
+    maximum_turns = min(maximum_turns, 18)
+
+    return {
+        "pupils": pupils,
+        "off_task_level": off_task_level,
+        "off_task_guidance": off_task_guidance,
+        "minimum_turns": minimum_turns,
+        "maximum_turns": maximum_turns,
+    }
+
+
+def _format_discussion_dynamics(dynamics):
+    pupil_lines = [
+        (
+            f"- {pupil['name']}: {pupil['pattern'].upper()} "
+            f"({pupil['signals']}). {pupil['guidance']}"
+        )
+        for pupil in dynamics["pupils"]
+    ]
+    return "\n".join(pupil_lines)
+
+
 def fetch_ai_answers(
     question,
     student_subset,
@@ -690,6 +900,14 @@ def generate_peer_discussion(
         )
         for _, row in participant_df.iterrows()
     ]
+    discussion_dynamics = build_discussion_dynamics(
+        participant_df,
+        discussion_kind,
+    )
+    dynamics_text = _format_discussion_dynamics(discussion_dynamics)
+    minimum_turns = discussion_dynamics["minimum_turns"]
+    maximum_turns = discussion_dynamics["maximum_turns"]
+    target_turns = random.randint(minimum_turns, maximum_turns)
     response_plans = build_response_calibration(
         question,
         participant_df,
@@ -700,7 +918,6 @@ def generate_peer_discussion(
         subject,
     )
     is_pair = discussion_kind == "turn_and_talk"
-    turn_count = 4 if is_pair else min(6, max(4, len(participant_names)))
     format_description = (
         "an adjacent pair completing a brief turn-and-talk"
         if is_pair
@@ -719,14 +936,24 @@ def generate_peer_discussion(
     {calibration_text}
     Misconceptions in {subject}: {misconception_guidance}
 
+    MANDATORY DISCUSSION DYNAMICS FROM THE SPREADSHEET:
+    {dynamics_text}
+
+    Group off-task likelihood: {discussion_dynamics["off_task_level"].upper()}.
+    {discussion_dynamics["off_task_guidance"]}
+
     Remembered whole-class discussion before they start:
     {_afl_transcript() or "No earlier contributions."}
 
     PEDAGOGICAL RULES:
-    1. Produce exactly {turn_count} short turns. Every listed pupil must speak at
-       least once, using their exact name as the speaker.
-    2. Make it a real exchange: pupils should agree, question, correct, extend or
-       politely challenge one another rather than deliver isolated answers.
+    1. Produce exactly {target_turns} short conversational turns for this exchange.
+       This target was selected from a natural range of {minimum_turns} to
+       {maximum_turns}; do not stop at four and do not distribute turns evenly.
+       Every pupil must be represented at least once using their exact name, although
+       a reluctant pupil's contribution may only be a refusal, fragment or prompted reply.
+    2. Make it a real exchange: pupils can agree, question, correct, extend, interrupt,
+       defer or challenge one another according to their assigned dynamics. A pupil
+       marked MONOPOLISES should take visibly more turns than their peers.
     3. Match each pupil's attainment, confidence, processing and discussion style, and
        follow their assigned starting state. Do not label mistakes in the conversation.
        Another pupil may notice, question or correct an error, but they should not all
@@ -746,6 +973,17 @@ def generate_peer_discussion(
     }}
     """
 
+    allowed_names = set(participant_names)
+
+    def clean_turns(payload):
+        cleaned = []
+        for turn in payload.get("turns", []):
+            speaker = str(turn.get("speaker", "")).strip()
+            dialogue = str(turn.get("dialogue", "")).strip()
+            if speaker in allowed_names and dialogue:
+                cleaned.append({"speaker": speaker, "dialogue": dialogue})
+        return cleaned
+
     for attempt in range(2):
         try:
             model = genai.GenerativeModel(REACTION_MODEL)
@@ -760,18 +998,67 @@ def generate_peer_discussion(
             raw_text = response.text.replace("```json", "").replace("```", "")
             ai_data = json.loads(raw_text.strip())
 
-            turns = []
-            allowed_names = set(participant_names)
-            for turn in ai_data.get("turns", []):
-                speaker = str(turn.get("speaker", "")).strip()
-                dialogue = str(turn.get("dialogue", "")).strip()
-                if speaker in allowed_names and dialogue:
-                    turns.append({"speaker": speaker, "dialogue": dialogue})
-
+            turns = clean_turns(ai_data)
             feedback = str(ai_data.get("feedback", "")).strip()
-            represented_names = {turn["speaker"] for turn in turns}
-            if turns and feedback and represented_names == allowed_names:
-                return {"turns": turns[:turn_count], "feedback": feedback}
+            continuation_count = 0
+
+            while len(turns) < target_turns and continuation_count < 2:
+                turns_needed = target_turns - len(turns)
+                existing_transcript = "\n".join(
+                    f"{turn['speaker']}: {turn['dialogue']}"
+                    for turn in turns
+                )
+                continuation_prompt = f"""
+                {prompt}
+
+                IMPORTANT CONTINUATION:
+                The first generation stopped too early after {len(turns)} turns.
+                Here is the private conversation so far:
+                {existing_transcript}
+
+                Continue from that exact point with {turns_needed} NEW turns. Do not
+                restart, repeat or summarise the existing turns. Preserve the assigned
+                reluctance, monopolising and off-task dynamics. Return only:
+                {{
+                  "turns": [
+                    {{"speaker": "Exact pupil name", "dialogue": "New dialogue only"}}
+                  ],
+                  "feedback": "Updated collective feedback after the full discussion"
+                }}
+                """
+                continuation_response = model.generate_content(
+                    continuation_prompt,
+                    generation_config={"response_mime_type": "application/json"},
+                )
+                continuation_raw = (
+                    continuation_response.text
+                    .replace("```json", "")
+                    .replace("```", "")
+                )
+                continuation_data = json.loads(continuation_raw.strip())
+                extra_turns = clean_turns(continuation_data)
+                if not extra_turns:
+                    break
+                turns.extend(extra_turns[:turns_needed])
+                updated_feedback = str(
+                    continuation_data.get("feedback", "")
+                ).strip()
+                if updated_feedback:
+                    feedback = updated_feedback
+                continuation_count += 1
+
+            bounded_turns = turns[:target_turns]
+            represented_names = {turn["speaker"] for turn in bounded_turns}
+            if (
+                minimum_turns <= len(bounded_turns) <= target_turns
+                and feedback
+                and represented_names == allowed_names
+            ):
+                return {
+                    "turns": bounded_turns,
+                    "feedback": feedback,
+                    "target_turns": target_turns,
+                }
         except Exception as exc:
             if attempt == 1:
                 st.error(f"Could not generate the pupil discussion: {exc}")
@@ -863,7 +1150,8 @@ def _render_peer_discussion_strategy(
 
     result_key = f"afl_peer_{discussion_kind}_result"
     result_context = (
-        f"{selected_label}|{subject}|{teacher_question.strip()}|"
+        f"{_AFL_PEER_FORMAT_VERSION}|{selected_label}|{subject}|"
+        f"{teacher_question.strip()}|"
         f"{st.session_state.get('afl_class_context', '')}"
     )
     listen_column, feedback_column = st.columns(2)
@@ -983,6 +1271,7 @@ def _render_peer_discussion_strategy(
             "You are listening in. Other pairs and tables cannot hear these turns, "
             "and they have not been added to the shared class discussion."
         )
+        st.caption(f"{len(result['turns'])} conversational turns generated.")
         if result.get("conversation_audio"):
             should_autoplay = bool(result.get("autoplay"))
             st.audio(
