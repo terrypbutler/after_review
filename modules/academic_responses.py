@@ -8,6 +8,7 @@ import re
 from PIL import Image
 from config import REACTION_MODEL
 from modules.app_secrets import get_secret
+from modules.audio_utils import pcm_segments_to_wav
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
@@ -203,6 +204,7 @@ def get_elevenlabs_audio(
     text,
     voice_id="JBFqnCBsd6RMkjVDRZzb",
     cohort="Year 7",
+    output_format="mp3_44100_96",
 ):
     api_key = get_secret("ELEVENLABS_API_KEY")
     if not api_key:
@@ -215,7 +217,7 @@ def get_elevenlabs_audio(
             text=text,
             voice_id=voice_id,
             model_id="eleven_flash_v2_5",
-            output_format="mp3_44100_96",
+            output_format=output_format,
             voice_settings=VoiceSettings(**_voice_settings_for_cohort(cohort)),
         )
         return b"".join(audio_generator)
@@ -511,6 +513,7 @@ def _render_peer_discussion_strategy(
                     )
 
                 if enable_voice and voice_available:
+                    pcm_segments = []
                     with st.spinner("Creating the pupils' voices..."):
                         for turn in discussion["turns"]:
                             speaker_rows = participant_df[
@@ -527,21 +530,28 @@ def _render_peer_discussion_strategy(
                                     turn["dialogue"],
                                     voice_id,
                                     cohort,
+                                    output_format="pcm_24000",
                                 )
+                                if audio_bytes:
+                                    pcm_segments.append(audio_bytes)
                             turns_with_audio.append(
-                                {**turn, "audio": audio_bytes}
+                                {**turn, "audio": None}
                             )
+                    conversation_audio = pcm_segments_to_wav(pcm_segments)
                 else:
                     turns_with_audio = [
                         {**turn, "audio": None}
                         for turn in discussion["turns"]
                     ]
+                    conversation_audio = None
 
                 st.session_state[result_key] = {
                     "context": result_context,
                     "kind": "conversation",
                     "turns": turns_with_audio,
                     "feedback": discussion["feedback"],
+                    "conversation_audio": conversation_audio,
+                    "autoplay": bool(conversation_audio),
                 }
                 for index, turn in enumerate(discussion["turns"]):
                     _append_afl_comment(
@@ -575,12 +585,18 @@ def _render_peer_discussion_strategy(
     st.markdown("---")
     if result["kind"] == "conversation":
         st.markdown("#### Conversation")
+        if result.get("conversation_audio"):
+            should_autoplay = bool(result.get("autoplay"))
+            st.audio(
+                result["conversation_audio"],
+                format="audio/wav",
+                autoplay=should_autoplay,
+            )
+            result["autoplay"] = False
         for turn in result["turns"]:
             with st.container(border=True):
                 st.markdown(f"**{turn['speaker']}**")
                 st.write(turn["dialogue"])
-                if turn.get("audio"):
-                    st.audio(turn["audio"], format="audio/mp3")
         st.caption(f"Possible class feedback: {result['feedback']}")
     else:
         st.markdown("#### Feedback shared with the class")
