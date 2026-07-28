@@ -155,8 +155,51 @@ def apply_app_styles() -> None:
                 border: 1px solid var(--studio-line);
                 border-radius: 1rem;
                 box-shadow: 0 8px 24px rgba(31, 45, 73, .05);
-                min-height: 7.2rem;
+                height: 100%;
+                min-height: 8.4rem;
+                overflow: visible;
                 padding: 1rem 1.1rem;
+            }
+            [data-testid="stMetricLabel"],
+            [data-testid="stMetricValue"] {
+                max-width: 100%;
+                overflow: visible;
+            }
+            [data-testid="stMetricLabel"] p,
+            [data-testid="stMetricValue"] > div {
+                line-height: 1.2;
+                overflow-wrap: anywhere;
+                white-space: normal;
+                word-break: normal;
+            }
+            [data-testid="stMetricValue"] > div {
+                font-size: clamp(1.3rem, 2.15vw, 2rem);
+            }
+            .stButton > button,
+            [data-testid="stBaseButton-secondary"] {
+                background: #ffffff;
+                border: 1px solid #9aa9bd;
+                color: var(--studio-ink);
+                font-weight: 700;
+            }
+            .stButton > button *,
+            [data-testid="stBaseButton-secondary"] * {
+                color: inherit !important;
+            }
+            .stButton > button:hover,
+            [data-testid="stBaseButton-secondary"]:hover {
+                background: #edf1ff;
+                border-color: var(--studio-blue);
+                color: #17358f;
+            }
+            [data-testid="stBaseButton-primary"] {
+                background: var(--studio-blue);
+                border-color: var(--studio-blue);
+                color: #ffffff;
+                font-weight: 750;
+            }
+            [data-testid="stBaseButton-primary"] * {
+                color: #ffffff !important;
             }
             [data-testid="stVerticalBlockBorderWrapper"] {
                 background: rgba(255,255,255,.9);
@@ -198,6 +241,8 @@ def apply_app_styles() -> None:
                 .block-container { padding-top: 1rem; }
                 .studio-hero { border-radius: 1rem; }
                 .studio-hero h1 { max-width: none; }
+                [data-testid="stMetric"] { min-height: 7.5rem; }
+                [data-testid="stMetricValue"] > div { font-size: 1.35rem; }
             }
         </style>
         """,
@@ -255,8 +300,8 @@ def render_home(
     metric_columns = st.columns(4)
     metric_columns[0].metric("Year 7", f"{len(cohorts['Year 7'])} students")
     metric_columns[1].metric("Year 10", f"{len(cohorts['Year 10'])} students")
-    metric_columns[2].metric("Practice tools", "5 connected modes")
-    metric_columns[3].metric("Classroom views", "4 planning views")
+    metric_columns[2].metric("Practice tools", "5 modes")
+    metric_columns[3].metric("Classroom views", "4 views")
 
     for cohort, message in load_errors.items():
         st.warning(
