@@ -11,6 +11,12 @@ from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
+from modules.seating_plan_utils import (
+    ensure_suggested_plan,
+    order_dataframe_by_plan,
+    plan_display_columns,
+)
+from modules.ui_components import render_seating_plan_overview
 
 _AFL_DISCUSSION_KEY = "afl_discussion"
 _AFL_STARTED_INTERACTIONS_KEY = "afl_started_interactions"
@@ -359,6 +365,20 @@ def create_printable_worksheet(question, answers, df, subject, cohort):
     return "\n".join(html)
 
 def render_academic_responses(df, cohort, subject="General"):
+    if "seating_plans" not in st.session_state:
+        st.session_state.seating_plans = {}
+    plan_key, seating_plan, plan_created = ensure_suggested_plan(
+        st.session_state.seating_plans,
+        df,
+        cohort,
+    )
+    class_context = f"{plan_key}|{subject}"
+    previous_context = st.session_state.get("afl_class_context")
+    if previous_context and previous_context != class_context:
+        _reset_academic_afl_state()
+    st.session_state.afl_class_context = class_context
+    df = order_dataframe_by_plan(df, seating_plan)
+
     _ensure_afl_state()
 
     # --- HEADER & MASTER TOGGLE ---
@@ -377,7 +397,14 @@ def render_academic_responses(df, cohort, subject="General"):
         ):
             _reset_academic_afl_state()
             st.rerun()
-        
+
+    if plan_created:
+        st.info(
+            "A suggested seating plan was created from the spreadsheet relationship "
+            "data. You can adjust it on the Seating Plan page."
+        )
+    render_seating_plan_overview(seating_plan, df, "Academic AfL")
+
     api_key = get_secret("GEMINI_API_KEY")
     if not api_key:
         st.error("⚠️ Gemini API Key missing.")
@@ -520,7 +547,7 @@ def render_academic_responses(df, cohort, subject="General"):
                         st.rerun()
             else:
                 st.markdown("---")
-                num_cols = 5
+                num_cols = plan_display_columns(seating_plan)
                 for i in range(0, len(df), num_cols):
                     cols = st.columns(num_cols)
                     for col, (_, row) in zip(cols, df.iloc[i : i + num_cols].iterrows()):
