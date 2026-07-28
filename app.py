@@ -147,7 +147,6 @@ elif page == "Year 7":
     render_photo_grid(filtered_df, "Year 7", num_cols=5)
     st.divider()
     st.subheader("📄 Detailed Passports")
-    render_working_group_finder(filtered_df, "Year 7")
     for _, row in filtered_df.iterrows():
         render_student_card(
             row,
@@ -234,7 +233,6 @@ elif page == "Year 10":
     render_photo_grid(filtered_df, "Year 10", num_cols=5)
     st.divider()
     st.subheader("📄 Detailed Passports")
-    render_working_group_finder(filtered_df, "Year 10")
     for _, row in filtered_df.iterrows():
         render_student_card(
             row,
@@ -334,8 +332,12 @@ elif page == "Seating Plan":
             filtered_df[selected_subject].notna() &
             (filtered_df[selected_subject].astype(str).str.strip() != "")
         ]
-    
-    # 4. Pass the fully filtered list into the planner
+
+    # 4. Use the same filtered spreadsheet class for group and seating choices.
+    render_working_group_finder(filtered_df, cohort)
+    st.divider()
+
+    # 5. Pass the fully filtered list into the planner
     from modules.seating_planner import render_seating_plan
     render_seating_plan(filtered_df, cohort)
 
