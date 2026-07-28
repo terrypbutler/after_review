@@ -9,9 +9,9 @@ from modules.app_shell import (
     render_navigation,
     render_sidebar_footer,
 )
-from modules.class_setup import render_subject_class_setup
+from modules.class_setup import render_class_filter, render_subject_class_setup
 from modules.data_loader import DataLoadError, load_data
-from modules.data_utils import count_active, safe_unique
+from modules.data_utils import count_active
 from modules.report_renderers import (
     generate_printable_html,
     render_photo_grid,
@@ -58,6 +58,13 @@ elif page == "Student Search":
     st.caption("Find a pupil quickly, then open their full context and subject report.")
     search_cohort = st.radio("Select Cohort to Search:", ["Year 7", "Year 10"], horizontal=True)
     df = get_cohort_data(search_cohort)
+    st.sidebar.subheader(f"🔎 Filters ({search_cohort})")
+    df = render_class_filter(
+        df,
+        search_cohort,
+        key_prefix="search",
+        include_option_subjects=search_cohort == "Year 10",
+    )
     query = st.text_input(
         "Search student name",
         key="search_name",
@@ -82,23 +89,8 @@ elif page == "Year 7":
     st.title("Year 7 class passports")
     st.caption("Scan the cohort, adjust the level of detail and prepare a printable view.")
     st.sidebar.subheader("🔎 Filters (Year 7)")
-    
-    # NEW: Explicit Grouping Choice
-    grouping_style = st.sidebar.radio("View Class By:", ["Mixed Ability (Tutor Groups)", "Streamed Sets (Maths)"], key="y7_group")
-    
-    filtered_df = df.copy()
-    
-    if grouping_style == "Mixed Ability (Tutor Groups)":
-        available_forms = safe_unique(df, "Form Group")
-        selected_form = st.sidebar.selectbox("Select Tutor Group:", ["All Tutor Groups"] + available_forms, key="y7_form")
-        if selected_form != "All Tutor Groups":
-            filtered_df = filtered_df[filtered_df["Form Group"].astype(str) == selected_form]
-            
-    else:
-        available_sets = safe_unique(df, "Maths Set")
-        selected_set = st.sidebar.selectbox("Select Class Set:", ["All Sets"] + available_sets, key="y7_set")
-        if selected_set != "All Sets":
-            filtered_df = filtered_df[filtered_df["Maths Set"].astype(str) == selected_set]
+
+    filtered_df = render_class_filter(df, "Year 7", key_prefix="y7")
 
     st.sidebar.divider()
     report_option = st.sidebar.radio("Select Report Detail", ["Base Passport (No Details)", "Short Report (Portrait & Home Life)", "Detailed Report (All Subjects)"])
@@ -162,29 +154,13 @@ elif page == "Year 10":
     st.title("Year 10 class passports")
     st.caption("Review tutor groups, sets or option classes with the context you need.")
     st.sidebar.subheader("🔎 Filters (Year 10)")
-    
-    # NEW: 3-Way Explicit Grouping Choice
-    grouping_style = st.sidebar.radio("View Class By:", ["Mixed Ability (Tutor Groups)", "Streamed Sets (Maths/Science)", "Option Subject"], key="y10_group")
-    
-    filtered_df = df.copy()
-    
-    if grouping_style == "Mixed Ability (Tutor Groups)":
-        available_forms = safe_unique(df, "Form Group")
-        selected_form = st.sidebar.selectbox("Select Tutor Group:", ["All Tutor Groups"] + available_forms, key="y10_form")
-        if selected_form != "All Tutor Groups":
-            filtered_df = filtered_df[filtered_df["Form Group"].astype(str) == selected_form]
-            
-    elif grouping_style == "Streamed Sets (Maths/Science)":
-        available_sets = safe_unique(df, "Maths Set")
-        selected_set = st.sidebar.selectbox("Select Class Set:", ["All Sets"] + available_sets, key="y10_set")
-        if selected_set != "All Sets":
-            filtered_df = filtered_df[filtered_df["Maths Set"].astype(str) == selected_set]
-            
-    elif grouping_style == "Option Subject":
-        available_subjects = [c for c in ["Art","Computing","Design","Drama","Geography","History","Hospitality","Music","Photography","Spanish","Sport"] if c in df.columns]
-        selected_subject = st.sidebar.selectbox("Select Option Subject:", ["Select Subject..."] + available_subjects, key="y10_sub")
-        if selected_subject != "Select Subject...":
-            filtered_df = filtered_df[filtered_df[selected_subject].notna() & (filtered_df[selected_subject].astype(str).str.strip() != "")]
+
+    filtered_df = render_class_filter(
+        df,
+        "Year 10",
+        key_prefix="y10",
+        include_option_subjects=True,
+    )
 
     st.sidebar.divider()
     report_option = st.sidebar.radio("Select Report Detail", ["Base Passport (No Details)", "Short Report (KS3 & Home Life)", "Detailed Report (All Subjects)"])
@@ -250,15 +226,12 @@ elif page == "Analytics":
     df_base = get_cohort_data(analytics_cohort)
 
     st.sidebar.subheader("🔎 Analytics Filters")
-    selected_form = st.sidebar.multiselect("Form Tutor Group", safe_unique(df_base, "Form Group"))
-    selected_math = st.sidebar.multiselect("Maths Set", safe_unique(df_base, "Maths Set"))
-    available_subjects = [c for c in ["Eng Lang","Eng Lit","Maths","Science","Art","Computing","Design","Drama","Geography","History","Hospitality","Music","Photography","Spanish","Sport"] if c in df_base.columns]
-    selected_subject = st.sidebar.selectbox("Option Class (optional)", ["All Subjects"] + available_subjects)
-
-    df = df_base.copy()
-    if selected_form: df = df[df["Form Group"].astype(str).isin(selected_form)]
-    if selected_math: df = df[df["Maths Set"].astype(str).isin(selected_math)]
-    if selected_subject != "All Subjects": df = df[df[selected_subject].notna() & (df[selected_subject].astype(str).str.strip() != "")]
+    df = render_class_filter(
+        df_base,
+        analytics_cohort,
+        key_prefix="analytics",
+        include_option_subjects=analytics_cohort == "Year 10",
+    )
 
     st.subheader(f"Overview: {len(df)} Students")
     m1, m2, m3, m4 = st.columns(4)
@@ -292,7 +265,7 @@ elif page == "Analytics":
 
     st.write("---")
     st.subheader("Raw Data")
-    desired_cols = ["Full Name", "Form Group", "Maths Set", "DoB", "Gender", "SEN Status", "Disadvantaged (PP)", "Ethnicity", "EAL Status", "SATs Reading", "SATs Maths"] if analytics_cohort == "Year 7" else ["Full Name", "Form Group", "Maths Set", "DoB", "Gender", "SEN Status", "SEND Detail", "Disadvantaged (PP)", "Ethnicity", "KS2 Read", "KS2 Maths", "EAL Status", "Eng Lang Predicted Grade", "Eng Lit Predicted Grade", "Maths Predicted Grade", "Sci 1 Predicted Grade", "Sci 2 Predicted Grade", "Art Predicted Grade", "Computing Predicted Grade", "Design Predicted Grade", "Drama Predicted Grade", "Geography Predicted Grade", "History Predicted Grade", "Hospitality Predicted Grade", "Music Predicted Grade", "Photography Predicted Grade", "Spanish Predicted Grade", "Sport Predicted Grade", "Attendance %", "Suspension days"]
+    desired_cols = ["Full Name", "Form Group", "Maths Set", "English Set", "Science Set", "DoB", "Gender", "SEN Status", "Disadvantaged (PP)", "Ethnicity", "EAL Status", "SATs Reading", "SATs Maths"] if analytics_cohort == "Year 7" else ["Full Name", "Form Group", "Maths Set", "English Set", "Science Set", "DoB", "Gender", "SEN Status", "SEND Detail", "Disadvantaged (PP)", "Ethnicity", "KS2 Read", "KS2 Maths", "EAL Status", "Eng Lang Predicted Grade", "Eng Lit Predicted Grade", "Maths Predicted Grade", "Sci 1 Predicted Grade", "Sci 2 Predicted Grade", "Art Predicted Grade", "Computing Predicted Grade", "Design Predicted Grade", "Drama Predicted Grade", "Geography Predicted Grade", "History Predicted Grade", "Hospitality Predicted Grade", "Music Predicted Grade", "Photography Predicted Grade", "Spanish Predicted Grade", "Sport Predicted Grade", "Attendance %", "Suspension days"]
     st.dataframe(df[[col for col in desired_cols if col in df.columns]], width="stretch")
 
 elif page == "Seating Plan":
@@ -305,33 +278,12 @@ elif page == "Seating Plan":
     
     # 2. Build the sidebar filters
     st.sidebar.subheader(f"🔎 Filters ({cohort})")
-    selected_form = st.sidebar.multiselect("Form Group (ALL by default)", safe_unique(df_base, "Form Group"), key="seat_form")
-    selected_math = st.sidebar.multiselect("Maths Set (ALL by default)", safe_unique(df_base, "Maths Set"), key="seat_math")
-    
-    # --- NEW: Year 10 Option Class Dropdown ---
-    selected_subject = "All Subjects"
-    if cohort == "Year 10":
-        subject_cols = [
-            "Eng Lang","Eng Lit","Maths","Science","Art","Computing","Design",
-            "Drama","Geography","History","Hospitality","Music","Photography",
-            "Spanish","Sport"
-        ]
-        available_subjects = [c for c in subject_cols if c in df_base.columns]
-        selected_subject = st.sidebar.selectbox("Option Class (optional)", ["All Subjects"] + available_subjects, key="seat_sub")
-
-    # 3. Create the filtered_df
-    filtered_df = df_base.copy()
-    if selected_form: 
-        filtered_df = filtered_df[filtered_df["Form Group"].astype(str).isin(selected_form)]
-    if selected_math: 
-        filtered_df = filtered_df[filtered_df["Maths Set"].astype(str).isin(selected_math)]
-    
-    # Apply the Subject filter if it was used
-    if selected_subject != "All Subjects":
-        filtered_df = filtered_df[
-            filtered_df[selected_subject].notna() &
-            (filtered_df[selected_subject].astype(str).str.strip() != "")
-        ]
+    filtered_df = render_class_filter(
+        df_base,
+        cohort,
+        key_prefix="seat",
+        include_option_subjects=cohort == "Year 10",
+    )
 
     # 4. Use the same filtered spreadsheet class for group and seating choices.
     render_working_group_finder(filtered_df, cohort)
@@ -351,15 +303,12 @@ elif page == "Simulator":
 
     # 2. Build the sidebar filters
     st.sidebar.subheader(f"🔎 Filters ({cohort})")
-    selected_form = st.sidebar.multiselect("Form Group (ALL by default)", safe_unique(df_base, "Form Group"), key="sim_form")
-    selected_math = st.sidebar.multiselect("Maths Set (ALL by default)", safe_unique(df_base, "Maths Set"), key="sim_math")
-
-    # 3. Create the filtered_df
-    filtered_df = df_base.copy()
-    if selected_form: 
-        filtered_df = filtered_df[filtered_df["Form Group"].astype(str).isin(selected_form)]
-    if selected_math: 
-        filtered_df = filtered_df[filtered_df["Maths Set"].astype(str).isin(selected_math)]
+    filtered_df = render_class_filter(
+        df_base,
+        cohort,
+        key_prefix="sim",
+        include_option_subjects=cohort == "Year 10",
+    )
 
     # 4. Pass the FILTERED list to the simulator
     from modules.student_simulator import render_simulator
