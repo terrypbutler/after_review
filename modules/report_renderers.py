@@ -24,6 +24,104 @@ def get_flexible_text(row, possible_names):
                 return val
     return None
 
+
+def render_working_group_finder(class_df, cohort):
+    """Render a visible spreadsheet-led group finder above the passports."""
+    if class_df is None or class_df.empty or "Full Name" not in class_df.columns:
+        return
+
+    student_names = sorted(
+        {
+            str(value).strip()
+            for value in class_df["Full Name"]
+            if str(value).strip()
+        },
+        key=str.casefold,
+    )
+    if len(student_names) < 2:
+        st.info("Show at least two students to create a working group.")
+        return
+
+    cohort_key = str(cohort).lower().replace(" ", "_")
+    class_signature = hashlib.sha1(
+        f"{cohort}|{'|'.join(student_names)}".encode("utf-8")
+    ).hexdigest()[:12]
+    group_sizes = list(range(2, min(6, len(student_names)) + 1))
+    default_size = 4 if 4 in group_sizes else group_sizes[-1]
+
+    with st.container(border=True):
+        st.markdown("### 👥 Working Group Finder")
+        st.caption(
+            "Choose a pupil to build a suitable group from the class currently "
+            "shown. The recommendation uses the published spreadsheet fields "
+            "Preferred Peers, Pairing Considerations, Peer Discussion Style, "
+            "Academic Confidence and Independence."
+        )
+
+        pupil_column, size_column = st.columns([2, 1])
+        with pupil_column:
+            pupil_name = st.selectbox(
+                "Choose a pupil",
+                student_names,
+                key=f"working_group_student_{cohort_key}_{class_signature}",
+            )
+        with size_column:
+            group_size = st.selectbox(
+                "Number of pupils",
+                group_sizes,
+                index=group_sizes.index(default_size),
+                key=f"working_group_size_{cohort_key}_{class_signature}",
+                help="This total includes the pupil you selected.",
+            )
+
+        selected_rows = class_df[
+            class_df["Full Name"].astype(str).str.strip() == pupil_name
+        ]
+        if selected_rows.empty:
+            return
+        selected_row = selected_rows.iloc[0]
+
+        result_key = (
+            f"working_group_finder_result_{cohort_key}_{class_signature}_"
+            f"{hashlib.sha1(f'{pupil_name}|{group_size}'.encode('utf-8')).hexdigest()[:10]}"
+        )
+        if st.button(
+            "Suggest suitable working group",
+            type="primary",
+            key=f"working_group_finder_button_{cohort_key}_{class_signature}",
+            use_container_width=True,
+        ):
+            st.session_state[result_key] = suggest_working_group(
+                selected_row,
+                class_df,
+                group_size=group_size,
+            )
+
+        if result_key in st.session_state:
+            peers = st.session_state[result_key]
+            if peers:
+                st.success(
+                    "**Suggested group:** "
+                    + " · ".join([pupil_name, *peers])
+                )
+            else:
+                st.warning(
+                    "No compatible group is available within the class currently shown."
+                )
+
+            preferred = get_flexible_text(selected_row, ["Preferred Peers"])
+            concerns = get_flexible_text(
+                selected_row,
+                ["Pairing Considerations"],
+            )
+            st.caption(
+                "Spreadsheet basis for "
+                f"{pupil_name} — preferred peers: {preferred or 'none recorded'}; "
+                f"pairing considerations: {concerns or 'none recorded'}. "
+                "A concern recorded against either pupil is always excluded."
+            )
+
+
 def render_student_card(
     row,
     cohort,
