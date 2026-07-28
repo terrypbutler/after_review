@@ -86,8 +86,10 @@ def build_student_observation_state(row, rng=random):
 
     work_rate = 0.72 + processing_speed / 220 + independence / 300
 
+    starting_motivation = int(max(38, min(92, round(motivation))))
     return {
-        "motivation": int(max(38, min(92, round(motivation)))),
+        "motivation": starting_motivation,
+        "initial_motivation": starting_motivation,
         "progress": 0,
         "decay_rate": int(max(2, min(9, round(decay_rate)))),
         "work_rate": max(0.65, min(1.45, work_rate)),
@@ -98,6 +100,9 @@ def build_student_observation_state(row, rng=random):
         "current_event": None,
         "current_event_kind": None,
         "last_toilet_minute": None,
+        "work_questions": 0,
+        "interventions": 0,
+        "positive_interventions": 0,
     }
 
 
@@ -242,6 +247,234 @@ def assign_classroom_events(
     return events
 
 
+def _engagement_delay_minutes(entry):
+    if not entry:
+        return None
+    time_value = str(entry.get("time", "")).strip()
+    if not time_value or time_value.casefold() == "failed":
+        return None
+    match = re.match(r"(\d+):(\d+)", time_value)
+    if not match:
+        return None
+    return int(match.group(1)) + int(match.group(2)) / 60.0
+
+
+def build_learning_summary(
+    active_names,
+    student_states,
+    engagement_log,
+    live_observations,
+    elapsed_minutes,
+    planned_minutes,
+    task,
+):
+    """Summarise simulated learning evidence when the observed class stops."""
+    pupils = [
+        name
+        for name in active_names
+        if name in student_states
+    ]
+    if not pupils:
+        return None
+
+    progress_values = [
+        float(student_states[name].get("progress", 0))
+        for name in pupils
+    ]
+    motivation_values = [
+        float(student_states[name].get("motivation", 0))
+        for name in pupils
+    ]
+    average_progress = round(sum(progress_values) / len(progress_values))
+    average_motivation = round(sum(motivation_values) / len(motivation_values))
+
+    bands = {
+        "substantial": sum(value >= 75 for value in progress_values),
+        "secure": sum(50 <= value < 75 for value in progress_values),
+        "developing": sum(25 <= value < 50 for value in progress_values),
+        "limited": sum(value < 25 for value in progress_values),
+    }
+
+    failed_starts = 0
+    delayed_starts = 0
+    for name in pupils:
+        entry = (engagement_log or {}).get(name, {})
+        if str(entry.get("time", "")).casefold() == "failed":
+            failed_starts += 1
+            continue
+        delay = _engagement_delay_minutes(entry)
+        if delay is not None and delay >= 1:
+            delayed_starts += 1
+
+    total_questions = sum(
+        int(student_states[name].get("work_questions", 0))
+        for name in pupils
+    )
+    total_interventions = sum(
+        int(student_states[name].get("interventions", 0))
+        for name in pupils
+    )
+
+    gap_themes = []
+    if bands["limited"] or bands["developing"]:
+        gap_themes.append(
+            f"{bands['limited'] + bands['developing']} pupils completed less than "
+            "half of the expected task, suggesting a need to revisit access, "
+            "understanding or independent application."
+        )
+    if total_questions:
+        gap_themes.append(
+            f"{total_questions} work-related questions were raised; check whether "
+            "instructions, modelling or the next step need clarifying."
+        )
+    if failed_starts or delayed_starts:
+        gap_themes.append(
+            f"{failed_starts} pupils did not establish a start and {delayed_starts} "
+            "started after the first minute; routines or task entry may need attention."
+        )
+    if average_motivation < 50:
+        gap_themes.append(
+            "Final class drive was low, so sustained attention may have limited the "
+            "amount of learning evidenced."
+        )
+    if not gap_themes:
+        gap_themes.append(
+            "No broad engagement gap was evident; use the individual follow-up list "
+            "to check smaller misconceptions or incomplete explanations."
+        )
+
+    ranked = sorted(
+        pupils,
+        key=lambda name: (
+            student_states[name].get("progress", 0),
+            student_states[name].get("motivation", 0),
+        ),
+        reverse=True,
+    )
+    standouts = []
+    for name in ranked[:3]:
+        stats = student_states[name]
+        reasons = [f"{stats.get('progress', 0):.0f}% task progress"]
+        motivation_change = (
+            stats.get("motivation", 0)
+            - stats.get("initial_motivation", stats.get("motivation", 0))
+        )
+        if motivation_change >= 8:
+            reasons.append(f"drive improved by {motivation_change:.0f} points")
+        if stats.get("positive_interventions", 0):
+            reasons.append("responded positively to teacher support")
+        standouts.append(
+            {
+                "name": name,
+                "reason": ", ".join(reasons),
+            }
+        )
+
+    follow_up_ranked = sorted(
+        pupils,
+        key=lambda name: (
+            student_states[name].get("progress", 0),
+            student_states[name].get("motivation", 0),
+        ),
+    )
+    follow_up = []
+    for name in follow_up_ranked:
+        stats = student_states[name]
+        needs_follow_up = (
+            stats.get("progress", 0) < 45
+            or stats.get("motivation", 0) < 40
+            or stats.get("work_questions", 0) >= 2
+        )
+        if not needs_follow_up:
+            continue
+        reasons = []
+        if stats.get("progress", 0) < 45:
+            reasons.append(f"only {stats.get('progress', 0):.0f}% task progress")
+        if stats.get("motivation", 0) < 40:
+            reasons.append("low final drive")
+        if stats.get("work_questions", 0) >= 2:
+            reasons.append(
+                f"asked {stats.get('work_questions', 0)} work questions"
+            )
+        observation = str((live_observations or {}).get(name, "")).strip()
+        follow_up.append(
+            {
+                "name": name,
+                "reason": ", ".join(reasons),
+                "observation": observation[:180],
+            }
+        )
+        if len(follow_up) >= 5:
+            break
+
+    elapsed = float(elapsed_minutes or 0)
+    planned = max(1.0, float(planned_minutes or 1))
+    return {
+        "task": str(task or "Independent task"),
+        "elapsed_minutes": elapsed,
+        "planned_minutes": planned,
+        "lesson_fraction": min(100, round(elapsed / planned * 100)),
+        "average_progress": average_progress,
+        "average_motivation": average_motivation,
+        "bands": bands,
+        "work_questions": total_questions,
+        "interventions": total_interventions,
+        "gap_themes": gap_themes,
+        "standouts": standouts,
+        "follow_up": follow_up,
+    }
+
+
+def render_learning_summary(summary):
+    """Display the retained end-of-observation learning review."""
+    st.markdown("### 🧾 Learning summary")
+    st.caption(
+        f"Stopped after {summary['elapsed_minutes']:g} of "
+        f"{summary['planned_minutes']:g} planned minutes "
+        f"({summary['lesson_fraction']}%). This is simulated observation evidence, "
+        "not a formal attainment judgement."
+    )
+
+    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+    with metric_1:
+        st.metric("Average task progress", f"{summary['average_progress']}%")
+    with metric_2:
+        st.metric("Final class drive", f"{summary['average_motivation']}%")
+    with metric_3:
+        st.metric("Work questions", summary["work_questions"])
+    with metric_4:
+        st.metric("Teacher interventions", summary["interventions"])
+
+    bands = summary["bands"]
+    st.markdown(
+        "**Learning evidence:** "
+        f"{bands['substantial']} substantial · "
+        f"{bands['secure']} secure · "
+        f"{bands['developing']} developing · "
+        f"{bands['limited']} limited"
+    )
+
+    gap_column, standout_column = st.columns(2)
+    with gap_column:
+        st.markdown("#### Gaps to address")
+        for gap in summary["gap_themes"]:
+            st.markdown(f"- {gap}")
+    with standout_column:
+        st.markdown("#### Individual standouts")
+        for pupil in summary["standouts"]:
+            st.markdown(f"- **{pupil['name']}** — {pupil['reason']}")
+
+    st.markdown("#### Pupils to follow up")
+    if not summary["follow_up"]:
+        st.success("No pupil met the current follow-up thresholds.")
+    else:
+        for pupil in summary["follow_up"]:
+            detail = f" — last observed: {pupil['observation']}" if pupil["observation"] else ""
+            st.markdown(
+                f"- **{pupil['name']}** — {pupil['reason']}{detail}"
+            )
+
+
 def render_observation_room(df, cohort):
     if "seating_plans" not in st.session_state:
         st.session_state.seating_plans = {}
@@ -262,6 +495,8 @@ def render_observation_room(df, cohort):
             "obs_time_elapsed",
             "obs_engagement_log",
             "obs_global_event",
+            "obs_lesson_stopped",
+            "obs_learning_summary",
             "student_states",
         }
         for key in list(st.session_state.keys()):
@@ -300,6 +535,8 @@ def render_observation_room(df, cohort):
     if "obs_time_elapsed" not in st.session_state: st.session_state.obs_time_elapsed = 0
     if "obs_engagement_log" not in st.session_state: st.session_state.obs_engagement_log = None
     if "obs_global_event" not in st.session_state: st.session_state.obs_global_event = None
+    if "obs_lesson_stopped" not in st.session_state: st.session_state.obs_lesson_stopped = False
+    if "obs_learning_summary" not in st.session_state: st.session_state.obs_learning_summary = None
     
     if "student_states" not in st.session_state: st.session_state.student_states = {}
 
@@ -411,10 +648,18 @@ def render_observation_room(df, cohort):
                         delta = int(ai_data.get("motivation_delta", 0))
                         
                         new_mot = min(100, max(0, current_mot + delta))
-                        st.session_state.student_states[target_name]["motivation"] = new_mot
+                        target_stats = st.session_state.student_states[target_name]
+                        target_stats["motivation"] = new_mot
+                        target_stats["interventions"] = (
+                            target_stats.get("interventions", 0) + 1
+                        )
+                        if delta > 0:
+                            target_stats["positive_interventions"] = (
+                                target_stats.get("positive_interventions", 0) + 1
+                            )
                         
-                        st.session_state.student_states[target_name]["current_event"] = None
-                        st.session_state.student_states[target_name]["current_event_kind"] = None
+                        target_stats["current_event"] = None
+                        target_stats["current_event_kind"] = None
                         
                         if delta > 0:
                             st.success(f"📈 Motivation increased by {delta}% (Now {new_mot}%)")
@@ -474,6 +719,8 @@ def render_observation_room(df, cohort):
                 st.session_state.obs_time_elapsed = 0
                 st.session_state.obs_engagement_log = None 
                 st.session_state.obs_global_event = None
+                st.session_state.obs_lesson_stopped = False
+                st.session_state.obs_learning_summary = None
                 
                 if uploaded_file is not None:
                     st.session_state.obs_image = Image.open(uploaded_file)
@@ -493,9 +740,22 @@ def render_observation_room(df, cohort):
 
         with col2:
             if st.session_state.obs_active_students:
+                if (
+                    st.session_state.obs_time_elapsed
+                    >= st.session_state.obs_task_duration
+                    and st.session_state.obs_time_elapsed > 0
+                ):
+                    st.session_state.obs_lesson_stopped = True
                 
                 st.markdown("### ⚙️ Time Controls")
-                advance_pct = st.slider("Advance Time (% of Total Duration):", min_value=5, max_value=100, value=10, step=5)
+                advance_pct = st.slider(
+                    "Advance Time (% of Total Duration):",
+                    min_value=5,
+                    max_value=100,
+                    value=10,
+                    step=5,
+                    disabled=st.session_state.obs_lesson_stopped,
+                )
                 
                 step_minutes = round((advance_pct / 100.0) * st.session_state.obs_task_duration, 1)
                 time_multiplier = step_minutes / 5.0 
@@ -504,7 +764,12 @@ def render_observation_room(df, cohort):
                 
                 with act_col1:
                     if st.session_state.obs_time_elapsed == 0:
-                        if st.button(f"👀 Watch Class Start (First {advance_pct}%)", type="secondary", width="stretch"):
+                        if st.button(
+                            f"👀 Watch Class Start (First {advance_pct}%)",
+                            type="secondary",
+                            width="stretch",
+                            disabled=st.session_state.obs_lesson_stopped,
+                        ):
                             st.session_state.obs_time_elapsed += step_minutes
                             
                             profiles = []
@@ -560,7 +825,11 @@ def render_observation_room(df, cohort):
                                     st.error(f"Failed to track start: {e}")
                                     
                     else:
-                        if st.button(f"⏱️ Advance Time ({advance_pct}%) & Scan Room", width="stretch"):
+                        if st.button(
+                            f"⏱️ Advance Time ({advance_pct}%) & Scan Room",
+                            width="stretch",
+                            disabled=st.session_state.obs_lesson_stopped,
+                        ):
                             st.session_state.obs_time_elapsed += step_minutes
                             if st.session_state.obs_time_elapsed > st.session_state.obs_task_duration:
                                 st.session_state.obs_time_elapsed = st.session_state.obs_task_duration
@@ -608,6 +877,10 @@ def render_observation_room(df, cohort):
                                     stats = st.session_state.student_states[name]
                                     stats["current_event"] = event["context"]
                                     stats["current_event_kind"] = event["kind"]
+                                    if event["kind"] == "work_question":
+                                        stats["work_questions"] = (
+                                            stats.get("work_questions", 0) + 1
+                                        )
 
                             profiles = []
                             for name in st.session_state.obs_active_students:
@@ -656,10 +929,35 @@ def render_observation_room(df, cohort):
                                     st.error(f"Failed scan: {e}")
 
                 with act_col2:
+                    if not st.session_state.obs_lesson_stopped:
+                        if st.button(
+                            "⏹️ Stop class and summarise",
+                            type="primary",
+                            width="stretch",
+                        ):
+                            st.session_state.obs_lesson_stopped = True
+                            st.session_state.obs_learning_summary = None
+                            st.rerun()
+                    else:
+                        st.success("Class stopped. The learning summary is available below.")
+                        if (
+                            st.session_state.obs_time_elapsed
+                            < st.session_state.obs_task_duration
+                            and st.button(
+                                "▶️ Resume observation",
+                                width="stretch",
+                            )
+                        ):
+                            st.session_state.obs_lesson_stopped = False
+                            st.session_state.obs_learning_summary = None
+                            st.rerun()
+
                     if st.button("🔄 Restart Activity (Reset Clock & Drive)", width="stretch"):
                         st.session_state.obs_time_elapsed = 0
                         st.session_state.obs_engagement_log = None
                         st.session_state.obs_global_event = None
+                        st.session_state.obs_lesson_stopped = False
+                        st.session_state.obs_learning_summary = None
                         
                         for name in st.session_state.obs_active_students:
                             row = df[df["Full Name"] == name].iloc[0]
@@ -714,11 +1012,31 @@ def render_observation_room(df, cohort):
             with dash_col1: st.metric("Class Average Motivation", f"{avg_mot}%")
             with dash_col2: st.metric("Class Average Progress", f"{avg_prog}%")
             with dash_col3: st.metric("Students Monitored", len(st.session_state.obs_active_students))
+
+            if st.session_state.obs_lesson_stopped:
+                if st.session_state.obs_learning_summary is None:
+                    st.session_state.obs_learning_summary = build_learning_summary(
+                        st.session_state.obs_active_students,
+                        st.session_state.student_states,
+                        st.session_state.obs_engagement_log,
+                        st.session_state.live_observations,
+                        st.session_state.obs_time_elapsed,
+                        st.session_state.obs_task_duration,
+                        st.session_state.obs_task,
+                    )
+                if st.session_state.obs_learning_summary:
+                    st.markdown("---")
+                    render_learning_summary(
+                        st.session_state.obs_learning_summary
+                    )
             
             st.markdown("### 📢 Broadcast to Class")
             st.caption("Address the entire room at once. Use this to reset focus, give a time warning, or clarify the task.")
             
-            class_announcement = st.chat_input("Speak to the entire class...")
+            class_announcement = st.chat_input(
+                "Speak to the entire class...",
+                disabled=st.session_state.obs_lesson_stopped,
+            )
             if class_announcement:
                 with st.spinner("The class is processing your announcement..."):
                     profiles_str = "\n".join([f"- {name} (Mot: {st.session_state.student_states[name]['motivation']}%)" for name in st.session_state.obs_active_students])
@@ -781,6 +1099,11 @@ def render_observation_room(df, cohort):
                             obs_text = st.session_state.live_observations.get(student_name, "Waiting for scan...")
                             st.info(f"*{obs_text}*")
                             
-                            if st.button("🗣️ Intervene", key=f"int_{student_name}", width="stretch"):
+                            if st.button(
+                                "🗣️ Intervene",
+                                key=f"int_{student_name}",
+                                width="stretch",
+                                disabled=st.session_state.obs_lesson_stopped,
+                            ):
                                 st.session_state.obs_intervene_target = student_name
                                 st.rerun()
