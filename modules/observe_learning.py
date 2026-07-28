@@ -6,6 +6,7 @@ from PIL import Image
 from config import REACTION_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
+from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
 
 try:
@@ -95,10 +96,7 @@ def render_observation_room(df, cohort):
 
                 target_row = df[df["Full Name"] == target_name].iloc[0]
                 age = "11" if cohort == "Year 7" else "15"
-                sen = get_flexible_text(target_row, ["SEN Status", "SEND Status", "SEN Detail"])
-                eal = get_flexible_text(target_row, ["EAL", "EAL Status"])
-                grade = get_flexible_text(target_row, ["Projected Grade", "Predicted Grade"])
-                susp = get_flexible_text(target_row, ["Suspension days", "Suspensions"])
+                response_profile = get_ai_response_profile(target_row, cohort)
                 
                 transcript = "\n".join([f"{'Teacher' if m['role']=='user' else target_name}: {m['content']}" for m in st.session_state[chat_key]])
 
@@ -112,7 +110,7 @@ def render_observation_room(df, cohort):
                 system_prompt = (
                     "**[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**\n"
                     f"You are roleplaying as a {age}-year-old UK student named {target_name}.\n"
-                    f"Data: SEN: {sen} | EAL: {eal} | Grade: {grade} | Suspensions: {susp}\n"
+                    f"Compact pupil response profile: {response_profile}\n"
                     f"Task: '{st.session_state.obs_task}'\n"
                     f"{event_context}"
                     f"Your current internal motivation level is {current_mot}/100.\n\n"
@@ -168,7 +166,11 @@ def render_observation_room(df, cohort):
 
                 if enable_voice and audio_text:
                     student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
-                    audio_bytes = get_elevenlabs_audio(audio_text, student_voice_id)
+                    audio_bytes = get_elevenlabs_audio(
+                        audio_text,
+                        student_voice_id,
+                        cohort,
+                    )
                     if audio_bytes:
                         st.session_state["latest_audio_obs"] = audio_bytes
                         
