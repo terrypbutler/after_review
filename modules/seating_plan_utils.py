@@ -173,3 +173,67 @@ def order_dataframe_by_plan(df: pd.DataFrame, plan: dict) -> pd.DataFrame:
 def plan_display_columns(plan: dict) -> int:
     """Return the visual column count that matches the saved room layout."""
     return 8 if plan.get("layout") == "Rows (4x8)" else 4
+
+
+def seating_discussion_groups(
+    plan: dict,
+    df: pd.DataFrame,
+    group_size: int,
+) -> list[dict]:
+    """Return adjacent pairs or four-seat groups from the saved plan."""
+    if (
+        df is None
+        or df.empty
+        or "Full Name" not in df.columns
+        or group_size not in {2, 4}
+    ):
+        return []
+
+    valid_names = {
+        str(value).strip()
+        for value in df["Full Name"]
+        if str(value).strip()
+    }
+    seats = {
+        key: str(value).strip()
+        for key, value in plan.get("seats", {}).items()
+        if str(value).strip() in valid_names
+    }
+
+    groups = []
+    for start in range(0, TOTAL_SEATS, group_size):
+        names = [
+            seats.get(f"seat_{seat_index}")
+            for seat_index in range(start, start + group_size)
+        ]
+        names = [name for name in names if name]
+        if len(names) < 2:
+            continue
+
+        if plan.get("layout") == "Groups (8 Tables)":
+            table_number = start // TABLE_SIZE + 1
+            if group_size == 2:
+                pair_number = (start % TABLE_SIZE) // 2 + 1
+                location = f"Table {table_number} · pair {pair_number}"
+            else:
+                location = f"Table {table_number}"
+        else:
+            row_number = start // 8 + 1
+            position = start % 8
+            if group_size == 2:
+                pair_number = position // 2 + 1
+                location = f"Row {row_number} · pair {pair_number}"
+            else:
+                group_letter = "A" if position < 4 else "B"
+                location = f"Row {row_number} · group {group_letter}"
+
+        separator = " & " if group_size == 2 else ", "
+        groups.append(
+            {
+                "location": location,
+                "students": names,
+                "label": f"{location} — {separator.join(names)}",
+            }
+        )
+
+    return groups
