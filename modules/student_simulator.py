@@ -4,6 +4,7 @@ import re
 from config import REACTION_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
+from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
 
 try:
@@ -48,8 +49,8 @@ def render_simulator(df, cohort):
     sen = get_flexible_text(row, ["SEN Status", "SEND Status", "SEN Detail"])
     home_life = get_flexible_text(row, ["Home Life & Interests", "Home Life", "Interests"])
     predicted = get_flexible_text(row, ["Projected Grade", "Predicted Grade"])
-    suspensions = get_flexible_text(row, ["Suspension days", "Suspensions"])
     eal = get_flexible_text(row, ["EAL", "EAL Status"])
+    response_profile = get_ai_response_profile(row, cohort)
 
     st.markdown("---")
 
@@ -89,11 +90,15 @@ def render_simulator(df, cohort):
             with st.chat_message("user"):
                 st.write(teacher_input)
 
-            transcript = "\n".join([f"{'Teacher' if m['role']=='user' else selected_student}: {m['content']}" for m in st.session_state[chat_key]])
+            recent_messages = st.session_state[chat_key][-8:]
+            transcript = "\n".join(
+                f"{'Teacher' if m['role']=='user' else selected_student}: {m['content']}"
+                for m in recent_messages
+            )
 
             system_prompt = (
                 f"You are roleplaying as a {age}-year-old UK student named {selected_student}.\n"
-                f"Data: SEN: {sen} | EAL: {eal} | Grade: {predicted} | Home: {home_life} | Suspensions: {suspensions}\n"
+                f"Compact pupil response profile: {response_profile}\n"
                 f"Scenario: {scenario}.\n\n"
                 f"Transcript:\n{transcript}\n\n"
                 "CRITICAL RULES:\n"
@@ -144,7 +149,11 @@ def render_simulator(df, cohort):
                         student_voice_id = row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
                         
                         # We pass the pure, scrubbed text directly to ElevenLabs
-                        audio_bytes = get_elevenlabs_audio(audio_text, student_voice_id)
+                        audio_bytes = get_elevenlabs_audio(
+                            audio_text,
+                            student_voice_id,
+                            cohort,
+                        )
 
                         if audio_bytes is None:
                             st.warning("ElevenLabs audio failed.")
