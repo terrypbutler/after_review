@@ -1,9 +1,9 @@
 import streamlit as st
-import random
 from config import REACTION_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.photo_utils import display_student_photo
+from modules.seating_plan_utils import ensure_suggested_plan, suggested_seat_map
 
 def get_flexible_text(row, possible_names):
     """Extracts text flexibly handling variations in column names."""
@@ -93,11 +93,27 @@ def render_seat_ui(seat_key, current_val, next_student, cohort, df):
 
 def render_seating_plan(df, cohort):
     st.subheader("⚡ Visual Classroom Planner")
-    
-    # Initialize State
+
+    # Keep a separate automatically saved plan for each exact filtered class.
+    if "seating_plans" not in st.session_state:
+        st.session_state.seating_plans = {}
+    plan_key, plan, plan_created = ensure_suggested_plan(
+        st.session_state.seating_plans,
+        df,
+        cohort,
+    )
+
+    st.session_state.seats = plan["seats"]
+    st.session_state.circulation_path = plan["circulation_path"]
+
+    if plan_created:
+        st.info(
+            "A relationship-aware seating suggestion has been created for this "
+            "class. It is saved automatically for Academic AfL and Observe Learning."
+        )
+
+    # Initialize remaining state.
     TOTAL_SEATS = 32
-    if 'seats' not in st.session_state: st.session_state.seats = {}
-    if 'circulation_path' not in st.session_state: st.session_state.circulation_path = []
     if 'mentor_chat' not in st.session_state: st.session_state.mentor_chat = []
     
     # Configure AI
@@ -106,7 +122,11 @@ def render_seating_plan(df, cohort):
         genai.configure(api_key=api_key)
     
     all_students = df["Full Name"].tolist()
-    assigned_students = [s for s in st.session_state.seats.values() if s != "Empty"]
+    assigned_students = [
+        student
+        for student in st.session_state.seats.values()
+        if student != "Empty" and student in all_students
+    ]
     unassigned_students = [s for s in all_students if s not in assigned_students]
 
     # --- SIDEBAR: NEXT UP SPOTLIGHT ---
@@ -127,21 +147,43 @@ def render_seating_plan(df, cohort):
         next_student = None
 
     # --- MAIN PAGE: TOOLS & PATH TRACKER ---
-    tools_c1, tools_c2, tools_c3 = st.columns([1.5, 1, 1])
+    tools_c1, tools_c2, tools_c3 = st.columns([1.5, 1.25, 1])
     with tools_c1:
-        layout_choice = st.radio("Seat Grouping:", ["Rows (4x8)", "Groups (8 Tables)"], horizontal=True, label_visibility="collapsed")
+        layouts = ["Rows (4x8)", "Groups (8 Tables)"]
+        saved_layout = plan.get("layout", "Groups (8 Tables)")
+        layout_choice = st.radio(
+            "Seat Grouping:",
+            layouts,
+            index=layouts.index(saved_layout) if saved_layout in layouts else 1,
+            horizontal=True,
+            label_visibility="collapsed",
+            key=f"seat_layout_{plan_key}",
+        )
+        plan["layout"] = layout_choice
     with tools_c2:
-        if st.button("🪄 Auto-Fill Room", width="stretch"):
-            available_seats = [f"seat_{i}" for i in range(TOTAL_SEATS) if st.session_state.seats.get(f"seat_{i}", "Empty") == "Empty"]
-            random.shuffle(unassigned_students)
-            for i, student in enumerate(unassigned_students):
-                if i < len(available_seats):
-                    st.session_state.seats[available_seats[i]] = student
+        if st.button(
+            "✨ Suggest Plan",
+            width="stretch",
+            help=(
+                "Rebuild the room using Preferred Peers, Pairing Considerations, "
+                "discussion style, confidence and independence."
+            ),
+        ):
+            plan["seats"] = suggested_seat_map(df, total_seats=TOTAL_SEATS)
+            plan["circulation_path"] = []
+            plan["source"] = "Suggested from spreadsheet relationships"
+            plan["cleared"] = False
+            st.session_state.seats = plan["seats"]
+            st.session_state.circulation_path = plan["circulation_path"]
             st.rerun()
     with tools_c3:
         if st.button("🗑️ Clear Room", width="stretch"):
-            st.session_state.seats = {}
-            st.session_state.circulation_path = []
+            plan["seats"] = {}
+            plan["circulation_path"] = []
+            plan["source"] = "Cleared in Seating Plan"
+            plan["cleared"] = True
+            st.session_state.seats = plan["seats"]
+            st.session_state.circulation_path = plan["circulation_path"]
             st.session_state.mentor_chat = []
             st.rerun()
 
@@ -151,12 +193,15 @@ def render_seating_plan(df, cohort):
         # Clean up the path list just in case someone was deleted
         safe_path = [name for name in st.session_state.circulation_path if name in assigned_students]
         
-        st.session_state.circulation_path = st.multiselect(
+        selected_path = st.multiselect(
             "👣 Build Circulation Route (Select students in the order you will visit them):",
             options=assigned_students,
             default=safe_path,
-            help="Click here to rapidly build your path without the page reloading on every click."
+            help="Click here to rapidly build your path without the page reloading on every click.",
+            key=f"circulation_path_{plan_key}",
         )
+        st.session_state.circulation_path = selected_path
+        plan["circulation_path"] = selected_path
     else:
         st.caption("*Seat some students to begin building a circulation route.*")
 
