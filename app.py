@@ -12,7 +12,12 @@ from modules.app_shell import (
 from modules.class_setup import render_subject_class_setup
 from modules.data_loader import DataLoadError, load_data
 from modules.data_utils import count_active, safe_unique
-from modules.report_renderers import render_student_card, render_photo_grid, generate_printable_html
+from modules.report_renderers import (
+    generate_printable_html,
+    render_photo_grid,
+    render_student_card,
+    render_working_group_finder,
+)
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -64,7 +69,13 @@ elif page == "Student Search":
         st.write(f"Found {len(results)} students")
         if len(results) == 0: st.warning("No matches found.")
         for _, row in results.iterrows():
-            render_student_card(row, search_cohort, show_projected=True, report_type="Detailed")
+            render_student_card(
+                row,
+                search_cohort,
+                show_projected=True,
+                report_type="Detailed",
+                class_df=df,
+            )
 
 elif page == "Year 7":
     df = get_cohort_data("Year 7")
@@ -120,8 +131,15 @@ elif page == "Year 7":
     render_photo_grid(filtered_df, "Year 7", num_cols=5)
     st.divider()
     st.subheader("📄 Detailed Passports")
+    render_working_group_finder(filtered_df, "Year 7")
     for _, row in filtered_df.iterrows():
-        render_student_card(row, "Year 7", show_projected=True, report_type=mode)
+        render_student_card(
+            row,
+            "Year 7",
+            show_projected=True,
+            report_type=mode,
+            class_df=filtered_df,
+        )
 
 elif page == "Year 10":
     df = get_cohort_data("Year 10")
@@ -183,8 +201,15 @@ elif page == "Year 10":
     render_photo_grid(filtered_df, "Year 10", num_cols=5)
     st.divider()
     st.subheader("📄 Detailed Passports")
+    render_working_group_finder(filtered_df, "Year 10")
     for _, row in filtered_df.iterrows():
-        render_student_card(row, "Year 10", show_projected=True, report_type=mode)
+        render_student_card(
+            row,
+            "Year 10",
+            show_projected=True,
+            report_type=mode,
+            class_df=filtered_df,
+        )
 
 elif page == "Analytics":
     st.title("Cohort analytics")
