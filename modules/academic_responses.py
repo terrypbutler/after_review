@@ -1,4 +1,5 @@
 import streamlit as st
+from elevenlabs import VoiceSettings
 from elevenlabs.client import ElevenLabs
 import json
 import time
@@ -8,6 +9,7 @@ from PIL import Image
 from config import REACTION_MODEL
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
+from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
 
 _AFL_DISCUSSION_KEY = "afl_discussion"
@@ -138,13 +140,14 @@ def _reset_academic_afl_state():
 
 def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_name):
     """Generate a student's response using the whole remembered class discussion."""
-    target_grade = get_flexible_text(target_row, ["Projected Grade", "Predicted Grade"])
-    target_sen = get_flexible_text(target_row, ["SEN Status", "SEND Status"])
+    response_profile = get_ai_response_profile(target_row, cohort, subject)
     transcript = _afl_transcript()
 
     chat_prompt = f"""
-    You are roleplaying as {target_name}, a {cohort} student. Target Grade: {target_grade}, SEN: {target_sen}.
+    You are roleplaying as {target_name}, a {cohort} student.
     The subject is {subject}. The teacher's name/title is {teacher_name}.
+    Use this compact pupil response profile:
+    {response_profile}
 
     This is the whole-class discussion so far. It includes comments from the teacher
     and potentially several different students:
@@ -173,7 +176,23 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
     return ai_data.get("dialogue", "..."), ai_data.get("emotion", "neutral")
 
 
-def get_elevenlabs_audio(text, voice_id="JBFqnCBsd6RMkjVDRZzb"):
+def _voice_settings_for_cohort(cohort):
+    """Keep a pupil's voice identity while giving Year 10 a subtler cadence."""
+    is_year_10 = str(cohort).strip().casefold() == "year 10"
+    return {
+        "stability": 0.56 if is_year_10 else 0.50,
+        "similarity_boost": 0.80,
+        "style": 0.0,
+        "use_speaker_boost": True,
+        "speed": 0.96 if is_year_10 else 1.0,
+    }
+
+
+def get_elevenlabs_audio(
+    text,
+    voice_id="JBFqnCBsd6RMkjVDRZzb",
+    cohort="Year 7",
+):
     api_key = get_secret("ELEVENLABS_API_KEY")
     if not api_key:
         st.error("⚠️ ELEVENLABS_API_KEY missing.")
@@ -184,8 +203,9 @@ def get_elevenlabs_audio(text, voice_id="JBFqnCBsd6RMkjVDRZzb"):
         audio_generator = client.text_to_speech.convert(
             text=text,
             voice_id=voice_id,
-            model_id="eleven_turbo_v2_5",
-            output_format="mp3_44100_96" # SPEED HACK 3: Highly compressed MP3 stream
+            model_id="eleven_flash_v2_5",
+            output_format="mp3_44100_96",
+            voice_settings=VoiceSettings(**_voice_settings_for_cohort(cohort)),
         )
         return b"".join(audio_generator)
     except Exception as e:
@@ -219,14 +239,8 @@ def fetch_ai_answers(
     profiles = []
     for _, row in student_subset.iterrows():
         name = row.get("Full Name")
-        grade = get_flexible_text(row, ["Projected Grade", "Predicted Grade"])
-        sen = get_flexible_text(row, ["SEN Status", "SEND Status"])
-        eal = get_flexible_text(row, ["EAL", "EAL Status"])
-        math_score = get_flexible_text(row, ["KS2 Maths", "KS2 Math", "SATs Maths"])
-        read_score = get_flexible_text(row, ["KS2 Read", "KS2 Reading", "SATs Reading"])
-        susp = get_flexible_text(row, ["Suspension days", "Suspensions"])
-        home = get_flexible_text(row, ["Home Life & Interests", "Home Life"])
-        profiles.append(f"- {name} | Target: {grade} | SEN: {sen} | EAL: {eal} | KS2 Math: {math_score} | KS2 Read: {read_score} | Susp: {susp} | Home: {home}")
+        response_profile = get_ai_response_profile(row, cohort, subject)
+        profiles.append(f"- {name}: {response_profile}")
         
     profiles_text = "\n".join(profiles)
     
@@ -239,7 +253,7 @@ def fetch_ai_answers(
     A trainee teacher (addressed as '{teacher_name}') is conducting a {subject} lesson for a class of {cohort} students (approximate age: {age_context}).
     The teacher has asked the class: "{question}"
     
-    Here is the detailed data for the specific students answering:
+    Here are the compact, privacy-minimised response profiles for the students answering:
     {profiles_text}
     
     {instructions}
@@ -248,9 +262,9 @@ def fetch_ai_answers(
     {discussion_history or "No students have contributed yet."}
     
     CRITICAL PEDAGOGICAL CONSTRAINTS:
-    1. Ability Match: Scale vocabulary, accuracy, length, and depth to their Target Grade and KS2/SATs scores. 
+    1. Ability Match: Scale vocabulary, accuracy, length, and depth to the compact profile.
     2. Deep Misconceptions: Inject realistic, {subject}-specific misconceptions or partial misunderstandings for lower grades.
-    3. Attitude: Factor in suspensions and home context to randomly assign a mood.
+    3. Participation Match: Use the pupil's confidence, participation, processing and discussion style; do not invent private background information.
     {address_rule}
     5. Math Formatting: Make maths look like real maths. DO NOT use raw carets (like r^2). You MUST use Unicode superscripts (e.g., r², x³, y₁) and symbols (π, √, ÷, ×, ±). For complex equations, use LaTeX wrapped in single `$` (e.g., `$x = \\frac{{1}}{{2}}$`).
     6. Layout: If the answer involves multiple steps of calculation, you MUST put each step on a new line using a newline character (\\n).
@@ -475,7 +489,11 @@ def render_academic_responses(df, cohort, subject="General"):
                             
                             if enable_voice:
                                 student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
-                                audio_bytes = get_elevenlabs_audio(reply_text, student_voice_id)
+                                audio_bytes = get_elevenlabs_audio(
+                                    reply_text,
+                                    student_voice_id,
+                                    cohort,
+                                )
                                 if audio_bytes:
                                     st.session_state["latest_audio"] = audio_bytes
                                     
@@ -688,7 +706,11 @@ def render_academic_responses(df, cohort, subject="General"):
 
                             if enable_voice:
                                 student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
-                                audio_bytes = get_elevenlabs_audio(student_reply, student_voice_id)
+                                audio_bytes = get_elevenlabs_audio(
+                                    student_reply,
+                                    student_voice_id,
+                                    cohort,
+                                )
                                 if audio_bytes:
                                     st.session_state["latest_audio"] = audio_bytes
                                     
@@ -720,7 +742,11 @@ def render_academic_responses(df, cohort, subject="General"):
                                 
                                 if enable_voice:
                                     student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
-                                    audio_bytes = get_elevenlabs_audio(reply_text, student_voice_id)
+                                    audio_bytes = get_elevenlabs_audio(
+                                        reply_text,
+                                        student_voice_id,
+                                        cohort,
+                                    )
                                     if audio_bytes:
                                         st.session_state["latest_audio"] = audio_bytes
                                         
@@ -791,7 +817,11 @@ def render_academic_responses(df, cohort, subject="General"):
 
                             if enable_voice:
                                 student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
-                                audio_bytes = get_elevenlabs_audio(student_reply, student_voice_id)
+                                audio_bytes = get_elevenlabs_audio(
+                                    student_reply,
+                                    student_voice_id,
+                                    cohort,
+                                )
                                 if audio_bytes:
                                     st.session_state["latest_audio"] = audio_bytes
                                     
@@ -819,7 +849,11 @@ def render_academic_responses(df, cohort, subject="General"):
                             
                             if enable_voice:
                                 student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
-                                audio_bytes = get_elevenlabs_audio(reply_text, student_voice_id)
+                                audio_bytes = get_elevenlabs_audio(
+                                    reply_text,
+                                    student_voice_id,
+                                    cohort,
+                                )
                                 if audio_bytes:
                                     st.session_state["latest_audio"] = audio_bytes
                                     
