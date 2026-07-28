@@ -15,6 +15,7 @@ from modules.seating_plan_utils import (
     ensure_suggested_plan,
     order_dataframe_by_plan,
     plan_display_columns,
+    seating_discussion_groups,
 )
 from modules.ui_components import render_seating_plan_overview
 
@@ -140,7 +141,11 @@ def _reset_academic_afl_state():
         "afl_cold_call_student",
     }
     for key in list(st.session_state.keys()):
-        if key in reset_keys or str(key).startswith("probe_chat_"):
+        if (
+            key in reset_keys
+            or str(key).startswith("probe_chat_")
+            or str(key).startswith("afl_peer_")
+        ):
             del st.session_state[key]
 
 
@@ -302,6 +307,286 @@ def fetch_ai_answers(
                 return {}
     return {}
 
+
+def generate_peer_discussion(
+    question,
+    participant_df,
+    cohort,
+    subject,
+    teacher_name,
+    discussion_kind,
+    uploaded_file=None,
+):
+    """Simulate a seating-based pupil conversation and its class feedback."""
+    participant_names = participant_df["Full Name"].astype(str).tolist()
+    profiles = [
+        (
+            f"- {row.get('Full Name')}: "
+            f"{get_ai_response_profile(row, cohort, subject)}"
+        )
+        for _, row in participant_df.iterrows()
+    ]
+    is_pair = discussion_kind == "turn_and_talk"
+    turn_count = 4 if is_pair else min(6, max(4, len(participant_names)))
+    format_description = (
+        "an adjacent pair completing a brief turn-and-talk"
+        if is_pair
+        else "a table group discussing the question together"
+    )
+
+    prompt = f"""
+    **[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**
+    A {cohort} {subject} class has been asked: "{question}"
+    The teacher is addressed as "{teacher_name}".
+
+    Simulate {format_description}. The pupils are:
+    {chr(10).join(profiles)}
+
+    Remembered whole-class discussion before they start:
+    {_afl_transcript() or "No earlier contributions."}
+
+    PEDAGOGICAL RULES:
+    1. Produce exactly {turn_count} short turns. Every listed pupil must speak at
+       least once, using their exact name as the speaker.
+    2. Make it a real exchange: pupils should agree, question, correct, extend or
+       politely challenge one another rather than deliver isolated answers.
+    3. Match each pupil's attainment, confidence, processing and discussion style.
+       Include a plausible misconception or uncertainty where their profile supports it.
+    4. Do not introduce the teacher as a speaker and do not invent private background.
+    5. Keep each turn to one or two natural spoken sentences.
+    6. Create a concise "feedback" statement in the pupils' collective voice that
+       could be shared with the whole class. It should state their conclusion and
+       preserve any important uncertainty; do not describe the hidden conversation.
+
+    Return ONLY this JSON structure:
+    {{
+      "turns": [
+        {{"speaker": "Exact pupil name", "dialogue": "What they say"}}
+      ],
+      "feedback": "We think..."
+    }}
+    """
+
+    for attempt in range(2):
+        try:
+            model = genai.GenerativeModel(REACTION_MODEL)
+            contents = [prompt]
+            if uploaded_file is not None:
+                uploaded_file.seek(0)
+                contents.append(Image.open(uploaded_file).copy())
+            response = model.generate_content(
+                contents,
+                generation_config={"response_mime_type": "application/json"},
+            )
+            raw_text = response.text.replace("```json", "").replace("```", "")
+            ai_data = json.loads(raw_text.strip())
+
+            turns = []
+            allowed_names = set(participant_names)
+            for turn in ai_data.get("turns", []):
+                speaker = str(turn.get("speaker", "")).strip()
+                dialogue = str(turn.get("dialogue", "")).strip()
+                if speaker in allowed_names and dialogue:
+                    turns.append({"speaker": speaker, "dialogue": dialogue})
+
+            feedback = str(ai_data.get("feedback", "")).strip()
+            represented_names = {turn["speaker"] for turn in turns}
+            if turns and feedback and represented_names == allowed_names:
+                return {"turns": turns[:turn_count], "feedback": feedback}
+        except Exception as exc:
+            if attempt == 1:
+                st.error(f"Could not generate the pupil discussion: {exc}")
+
+    return {"turns": [], "feedback": ""}
+
+
+def _render_peer_discussion_strategy(
+    df,
+    cohort,
+    subject,
+    teacher_name,
+    teacher_question,
+    uploaded_file,
+    enable_voice,
+    seating_plan,
+    discussion_kind,
+):
+    """Render Turn and Talk or table discussion controls and results."""
+    is_pair = discussion_kind == "turn_and_talk"
+    group_size = 2 if is_pair else 4
+    groups = seating_discussion_groups(seating_plan, df, group_size)
+    strategy_title = "Turn and Talk" if is_pair else "Group Discussion"
+
+    st.markdown(f"### {strategy_title}")
+    st.caption(
+        (
+            "Select two pupils who are seated next to one another."
+            if is_pair
+            else "Select a saved table group."
+        )
+        + " Listen to their exchange, or simulate it privately and hear only "
+        "the feedback they would share with the class."
+    )
+
+    if not groups:
+        st.warning(
+            "No suitable seated group is available. Open Seating Plan, select the "
+            "same class and create or adjust its plan."
+        )
+        return
+
+    labels = [group["label"] for group in groups]
+    selected_label = st.selectbox(
+        "Choose seated pupils",
+        labels,
+        key=f"afl_peer_{discussion_kind}_selection",
+    )
+    selected_group = next(
+        group for group in groups if group["label"] == selected_label
+    )
+    participant_names = selected_group["students"]
+    participant_df = df[
+        df["Full Name"].astype(str).isin(participant_names)
+    ].copy()
+    participant_df["_discussion_order"] = participant_df["Full Name"].map(
+        {name: index for index, name in enumerate(participant_names)}
+    )
+    participant_df = participant_df.sort_values("_discussion_order").drop(
+        columns="_discussion_order"
+    )
+
+    photo_columns = st.columns(len(participant_names))
+    for column, name in zip(photo_columns, participant_names):
+        with column:
+            display_student_photo(name, cohort)
+            st.markdown(f"**{name}**")
+    st.caption(selected_group["location"])
+
+    result_key = f"afl_peer_{discussion_kind}_result"
+    result_context = (
+        f"{selected_label}|{subject}|{teacher_question.strip()}|"
+        f"{st.session_state.get('afl_class_context', '')}"
+    )
+    listen_column, feedback_column = st.columns(2)
+
+    with listen_column:
+        listen_clicked = st.button(
+            "🔊 Listen to conversation",
+            type="primary",
+            width="stretch",
+            key=f"afl_peer_{discussion_kind}_listen",
+        )
+    with feedback_column:
+        feedback_clicked = st.button(
+            "📣 Feedback to class",
+            width="stretch",
+            key=f"afl_peer_{discussion_kind}_feedback",
+            help=(
+                "The discussion is simulated, but only the pupils' collective "
+                "summary is shown."
+            ),
+        )
+
+    if listen_clicked or feedback_clicked:
+        action_text = "conversation" if listen_clicked else "private discussion"
+        with st.spinner(f"Simulating the pupils' {action_text}..."):
+            discussion = generate_peer_discussion(
+                teacher_question,
+                participant_df,
+                cohort,
+                subject,
+                teacher_name,
+                discussion_kind,
+                uploaded_file,
+            )
+
+        if discussion["turns"] and discussion["feedback"]:
+            if listen_clicked:
+                turns_with_audio = []
+                voice_available = bool(get_secret("ELEVENLABS_API_KEY"))
+                if enable_voice and not voice_available:
+                    st.warning(
+                        "The conversation transcript is ready, but the ElevenLabs "
+                        "key is unavailable, so voice audio could not be created."
+                    )
+
+                if enable_voice and voice_available:
+                    with st.spinner("Creating the pupils' voices..."):
+                        for turn in discussion["turns"]:
+                            speaker_rows = participant_df[
+                                participant_df["Full Name"] == turn["speaker"]
+                            ]
+                            audio_bytes = None
+                            if not speaker_rows.empty:
+                                voice_id = get_flexible_text(
+                                    speaker_rows.iloc[0],
+                                    ["Voice_Name", "Voice ID", "Voice_ID"],
+                                    "JBFqnCBsd6RMkjVDRZzb",
+                                )
+                                audio_bytes = get_elevenlabs_audio(
+                                    turn["dialogue"],
+                                    voice_id,
+                                    cohort,
+                                )
+                            turns_with_audio.append(
+                                {**turn, "audio": audio_bytes}
+                            )
+                else:
+                    turns_with_audio = [
+                        {**turn, "audio": None}
+                        for turn in discussion["turns"]
+                    ]
+
+                st.session_state[result_key] = {
+                    "context": result_context,
+                    "kind": "conversation",
+                    "turns": turns_with_audio,
+                    "feedback": discussion["feedback"],
+                }
+                for index, turn in enumerate(discussion["turns"]):
+                    _append_afl_comment(
+                        "student",
+                        turn["speaker"],
+                        turn["dialogue"],
+                        source="peer-discussion",
+                        marker=(
+                            f"{discussion_kind}::{result_context}::turn::{index}"
+                        ),
+                    )
+            else:
+                # Deliberately discard the private turns so only feedback is shared.
+                st.session_state[result_key] = {
+                    "context": result_context,
+                    "kind": "feedback",
+                    "feedback": discussion["feedback"],
+                }
+                _append_afl_comment(
+                    "student",
+                    f"{selected_group['location']} feedback",
+                    discussion["feedback"],
+                    source="peer-discussion",
+                    marker=f"{discussion_kind}::{result_context}::feedback",
+                )
+
+    result = st.session_state.get(result_key)
+    if not result or result.get("context") != result_context:
+        return
+
+    st.markdown("---")
+    if result["kind"] == "conversation":
+        st.markdown("#### Conversation")
+        for turn in result["turns"]:
+            with st.container(border=True):
+                st.markdown(f"**{turn['speaker']}**")
+                st.write(turn["dialogue"])
+                if turn.get("audio"):
+                    st.audio(turn["audio"], format="audio/mp3")
+        st.caption(f"Possible class feedback: {result['feedback']}")
+    else:
+        st.markdown("#### Feedback shared with the class")
+        st.success(result["feedback"])
+
+
 def create_printable_worksheet(question, answers, df, subject, cohort):
     html = [
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Marking Practice</title>",
@@ -438,10 +723,12 @@ def render_academic_responses(df, cohort, subject="General"):
     st.markdown("---")
     st.markdown("### 2. Select Questioning Strategy")
     mode = st.radio("Strategy:", [
-        "📝 Mini-Whiteboards (Whole Class)", 
-        "🚪 Exit Tickets (Detailed)", 
-        "🙋 Hands Up (Volunteers)", 
-        "🎯 Cold Call (Interactive Probing)"
+        "📝 Mini-Whiteboards (Whole Class)",
+        "🗣️ Turn and Talk",
+        "👥 Group Discussion",
+        "🚪 Exit Tickets (Detailed)",
+        "🙋 Hands Up (Volunteers)",
+        "🎯 Cold Call (Interactive Probing)",
     ], horizontal=True, label_visibility="collapsed", key="afl_strategy")
     
     st.markdown("---")
@@ -643,6 +930,34 @@ def render_academic_responses(df, cohort, subject="General"):
                         display_student_photo(name, saved_cohort)
                     with col2:
                         st.markdown(st_ans)
+
+    # --- MODE: TURN AND TALK ---
+    elif mode == "🗣️ Turn and Talk":
+        _render_peer_discussion_strategy(
+            df,
+            cohort,
+            subject,
+            teacher_name,
+            teacher_question,
+            uploaded_file,
+            enable_voice,
+            seating_plan,
+            "turn_and_talk",
+        )
+
+    # --- MODE: GROUP DISCUSSION ---
+    elif mode == "👥 Group Discussion":
+        _render_peer_discussion_strategy(
+            df,
+            cohort,
+            subject,
+            teacher_name,
+            teacher_question,
+            uploaded_file,
+            enable_voice,
+            seating_plan,
+            "group_discussion",
+        )
 
     # --- MODE: HANDS UP ---
     elif mode == "🙋 Hands Up (Volunteers)":
