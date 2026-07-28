@@ -1,14 +1,16 @@
 import streamlit as st
 from elevenlabs import VoiceSettings
 from elevenlabs.client import ElevenLabs
+import hashlib
 import json
 import time
 import random
 import re
+from io import BytesIO
+import wave
 from PIL import Image
 from config import REACTION_MODEL
 from modules.app_secrets import get_secret
-from modules.audio_utils import pcm_segments_to_wav
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
@@ -23,6 +25,29 @@ from modules.ui_components import render_seating_plan_overview
 _AFL_DISCUSSION_KEY = "afl_discussion"
 _AFL_STARTED_INTERACTIONS_KEY = "afl_started_interactions"
 _AFL_EXIT_ANSWERS_KEY = "afl_exit_answers"
+
+
+def pcm_segments_to_wav(
+    segments,
+    sample_rate=24000,
+    pause_ms=320,
+):
+    """Join signed 16-bit mono PCM clips into one sequential WAV conversation."""
+    clean_segments = [bytes(segment) for segment in segments if segment]
+    if not clean_segments:
+        return None
+
+    samples_per_pause = max(0, int(sample_rate * pause_ms / 1000))
+    silence = b"\x00\x00" * samples_per_pause
+    combined_pcm = silence.join(clean_segments)
+
+    output = BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(combined_pcm)
+    return output.getvalue()
 
 
 def _ensure_afl_state():
@@ -84,6 +109,15 @@ def build_afl_transcript(comments):
 def _afl_transcript():
     _ensure_afl_state()
     return build_afl_transcript(st.session_state[_AFL_DISCUSSION_KEY])
+
+
+def _opening_afl_question():
+    """Return the first teacher prompt retained in the current AfL session."""
+    _ensure_afl_state()
+    for comment in st.session_state[_AFL_DISCUSSION_KEY]:
+        if comment.get("role") == "teacher":
+            return str(comment.get("content", "")).strip()
+    return ""
 
 
 def _render_afl_discussion():
@@ -154,12 +188,27 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
     """Generate a student's response using the whole remembered class discussion."""
     response_profile = get_ai_response_profile(target_row, cohort, subject)
     transcript = _afl_transcript()
+    question_context = _opening_afl_question() or transcript
+    response_outcome = _response_outcome(
+        target_row,
+        question_context,
+        subject,
+    )
+    outcome_guidance = _RESPONSE_OUTCOME_GUIDANCE[response_outcome]
+    misconception_guidance = _SUBJECT_MISCONCEPTION_GUIDANCE.get(
+        str(subject).strip().casefold(),
+        "Use an authentic question-specific error from the subject.",
+    )
 
     chat_prompt = f"""
     You are roleplaying as {target_name}, a {cohort} student.
     The subject is {subject}. The teacher's name/title is {teacher_name}.
     Use this compact pupil response profile:
     {response_profile}
+
+    Their underlying response state for this question is:
+    {response_outcome.upper()} — {outcome_guidance}
+    Relevant misconception guidance: {misconception_guidance}
 
     This is the whole-class discussion so far. It includes comments from the teacher
     and potentially several different students:
@@ -170,7 +219,9 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
     2. Remember every earlier contribution. If asked about another student's answer,
        explicitly agree, disagree, correct, extend or improve it in a realistic way.
     3. Do not claim that another student's comment was your own.
-    4. Match the student's likely attainment and needs; do not automatically make every answer correct.
+    4. Match the student's likely attainment and needs. Do not automatically become
+       correct just because the teacher probes. Reveal the pupil's thinking; self-correct
+       only when the latest prompt or a classmate has supplied a genuinely useful scaffold.
     5. Determine the student's current emotion. Pick ONE:
        [neutral, angry, defensive, sad, bored, hesitant, excited, eager].
     6. Return a raw JSON object with exactly two keys: "dialogue" and "emotion".
@@ -236,6 +287,297 @@ def get_flexible_text(row, possible_names, default="None recorded"):
                 return val
     return default
 
+
+_RESPONSE_OUTCOME_GUIDANCE = {
+    "secure": (
+        "Give a correct, age-appropriate answer, but keep it like genuine pupil work: "
+        "concise rather than polished or teacher-like."
+    ),
+    "partial": (
+        "Show a correct starting idea but omit an important step, qualification, piece "
+        "of evidence or explanation, so the answer does not fully meet the question."
+    ),
+    "misconception": (
+        "Give a plausible, recognisable subject-specific misconception that a teacher "
+        "could diagnose. It must be relevant to this exact question, not a random error."
+    ),
+    "slip": (
+        "Use a mainly sound idea or method but include one realistic calculation, sign, "
+        "unit, transcription, terminology or evidence-selection slip."
+    ),
+    "uncertain": (
+        "Make a tentative, incomplete attempt. The pupil may hesitate or say they are "
+        "not sure, but must still reveal enough thinking for the teacher to respond."
+    ),
+}
+
+_SUBJECT_MISCONCEPTION_GUIDANCE = {
+    "maths": (
+        "Choose from question-relevant errors such as the wrong inverse operation, "
+        "negative-sign or place-value confusion, operating on numerator and denominator "
+        "incorrectly, confusing area with perimeter, order-of-operations errors, or "
+        "missing/incorrect units."
+    ),
+    "english": (
+        "Choose a question-relevant error such as retelling instead of analysing, an "
+        "unsupported inference, misidentifying a method, selecting weak evidence, "
+        "confusing speaker or viewpoint, or explaining effect too generally."
+    ),
+    "science": (
+        "Choose a question-relevant everyday misconception, such as confusing mass and "
+        "weight, heat and temperature, force and motion, energy stores and transfers, "
+        "particles and substances, cells and organs, or independent and control variables."
+    ),
+}
+
+
+def _first_number(value):
+    """Return the first numeric value in a spreadsheet cell, if present."""
+    text = str(value or "").strip()
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def _bounded_metric(row, columns):
+    """Read a 0-100 pupil metric without treating missing data as zero."""
+    value = get_flexible_text(row, columns, default="")
+    number = _first_number(value)
+    if number is None:
+        return None
+    return max(0.0, min(100.0, number))
+
+
+def _grade_score(row, columns):
+    """Normalise a 1-9 predicted grade to a 0-100 attainment estimate."""
+    value = get_flexible_text(row, columns, default="")
+    if not value:
+        return None
+    if str(value).strip().upper() == "B":
+        return 22.0
+    number = _first_number(value)
+    if number is None:
+        return None
+    if 0 <= number <= 9:
+        return max(0.0, min(100.0, number / 9.0 * 100.0))
+    return None
+
+
+def _ks2_score(row, columns):
+    """Normalise a KS2 scaled score, retaining B as below expected level."""
+    value = get_flexible_text(row, columns, default="")
+    if not value:
+        return None
+    if str(value).strip().upper() == "B":
+        return 22.0
+    number = _first_number(value)
+    if number is None:
+        return None
+    if 80 <= number <= 120:
+        return max(0.0, min(100.0, (number - 80.0) / 40.0 * 100.0))
+    return None
+
+
+def _set_score(row, subject):
+    """Use teaching set as a light fallback when no attainment grade is available."""
+    subject_key = str(subject).strip().casefold()
+    set_column = {
+        "maths": "Maths Set",
+        "english": "English Set",
+        "science": "Science Set",
+    }.get(subject_key)
+    if not set_column:
+        return None
+    set_number = _first_number(get_flexible_text(row, [set_column], default=""))
+    if set_number is None:
+        return None
+    return {
+        1: 82.0,
+        2: 68.0,
+        3: 54.0,
+        4: 41.0,
+        5: 30.0,
+    }.get(int(set_number), 45.0)
+
+
+def _student_attainment_score(row, subject):
+    """Estimate likely answer security from subject attainment and learning metrics."""
+    subject_key = str(subject).strip().casefold()
+    grade_columns = {
+        "maths": ["Maths Predicted Grade", "Maths Target Grade"],
+        "english": [
+            "Eng Lang Predicted Grade",
+            "Eng Lit Predicted Grade",
+            "English Predicted Grade",
+            "English Target Grade",
+        ],
+        "science": [
+            "Sci 1 Predicted Grade",
+            "Sci 2 Predicted Grade",
+            "Science Predicted Grade",
+            "Science Target Grade",
+        ],
+    }.get(subject_key, [])
+    grade_columns += ["Projected Grade", "Predicted Grade", "Target Grade"]
+
+    attainment_evidence = []
+    grade = _grade_score(row, grade_columns)
+    if grade is not None:
+        attainment_evidence.append(grade)
+
+    if subject_key == "english":
+        ks2 = _ks2_score(
+            row,
+            ["KS2 Read", "KS2 Reading", "SATs Reading", "SAT's Reading"],
+        )
+    elif subject_key in {"maths", "science"}:
+        ks2 = _ks2_score(
+            row,
+            ["KS2 Maths", "KS2 Math", "SATs Maths", "SAT's Maths"],
+        )
+    else:
+        ks2 = None
+    if ks2 is not None:
+        attainment_evidence.append(ks2)
+
+    set_score = _set_score(row, subject)
+    if set_score is not None:
+        attainment_evidence.append(set_score)
+
+    confidence = _bounded_metric(row, ["Academic Confidence"])
+    independence = _bounded_metric(row, ["Independence"])
+    learning_metrics = [
+        value for value in (confidence, independence) if value is not None
+    ]
+
+    attainment = (
+        sum(attainment_evidence) / len(attainment_evidence)
+        if attainment_evidence
+        else 50.0
+    )
+    if not learning_metrics:
+        return attainment
+
+    learning_readiness = sum(learning_metrics) / len(learning_metrics)
+    return 0.78 * attainment + 0.22 * learning_readiness
+
+
+def _response_outcome(row, question, subject):
+    """Choose a stable but varied response outcome for one pupil and question."""
+    score = _student_attainment_score(row, subject)
+    if score >= 75:
+        weights = (
+            ("secure", 0.48),
+            ("partial", 0.24),
+            ("misconception", 0.12),
+            ("slip", 0.11),
+            ("uncertain", 0.05),
+        )
+    elif score >= 55:
+        weights = (
+            ("secure", 0.31),
+            ("partial", 0.28),
+            ("misconception", 0.22),
+            ("slip", 0.12),
+            ("uncertain", 0.07),
+        )
+    elif score >= 35:
+        weights = (
+            ("secure", 0.18),
+            ("partial", 0.27),
+            ("misconception", 0.32),
+            ("slip", 0.12),
+            ("uncertain", 0.11),
+        )
+    else:
+        weights = (
+            ("secure", 0.10),
+            ("partial", 0.23),
+            ("misconception", 0.38),
+            ("slip", 0.13),
+            ("uncertain", 0.16),
+        )
+
+    name = get_flexible_text(row, ["Full Name"], default="Student")
+    seed_text = f"{name}|{subject}|{str(question).strip()}".casefold()
+    digest = hashlib.sha256(seed_text.encode("utf-8")).digest()
+    roll = int.from_bytes(digest[:8], "big") / float(2**64)
+
+    cumulative = 0.0
+    for outcome, weight in weights:
+        cumulative += weight
+        if roll < cumulative:
+            return outcome
+    return weights[-1][0]
+
+
+def build_response_calibration(question, student_subset, subject):
+    """Assign an unlabelled, realistic mix of answer qualities to a pupil group."""
+    plans = []
+    for _, row in student_subset.iterrows():
+        plans.append(
+            {
+                "name": str(row.get("Full Name", "Student")),
+                "score": _student_attainment_score(row, subject),
+                "outcome": _response_outcome(row, question, subject),
+            }
+        )
+
+    if len(plans) >= 4:
+        required_substantive_errors = max(1, (len(plans) + 3) // 4)
+        substantive_errors = [
+            plan
+            for plan in plans
+            if plan["outcome"] in {"misconception", "slip"}
+        ]
+        candidates = sorted(
+            (
+                plan
+                for plan in plans
+                if plan["outcome"] not in {"misconception", "slip"}
+            ),
+            key=lambda plan: (plan["score"], plan["name"].casefold()),
+        )
+        while len(substantive_errors) < required_substantive_errors and candidates:
+            plan = candidates.pop(0)
+            plan["outcome"] = (
+                "misconception"
+                if len(substantive_errors) % 3 != 2
+                else "slip"
+            )
+            substantive_errors.append(plan)
+    elif len(plans) >= 2 and all(
+        plan["outcome"] == "secure" for plan in plans
+    ):
+        lowest_security = min(
+            plans,
+            key=lambda plan: (plan["score"], plan["name"].casefold()),
+        )
+        lowest_security["outcome"] = "partial"
+
+    return plans
+
+
+def _format_response_calibration(plans, subject):
+    lines = []
+    for plan in plans:
+        guidance = _RESPONSE_OUTCOME_GUIDANCE[plan["outcome"]]
+        lines.append(f"- {plan['name']}: {plan['outcome'].upper()} — {guidance}")
+
+    subject_guidance = _SUBJECT_MISCONCEPTION_GUIDANCE.get(
+        str(subject).strip().casefold(),
+        (
+            "Use an authentic question-specific error from the subject rather than a "
+            "random factual mistake."
+        ),
+    )
+    return "\n".join(lines), subject_guidance
+
+
 def fetch_ai_answers(
     question,
     student_subset,
@@ -256,6 +598,15 @@ def fetch_ai_answers(
         profiles.append(f"- {name}: {response_profile}")
         
     profiles_text = "\n".join(profiles)
+    response_plans = build_response_calibration(
+        question,
+        student_subset,
+        subject,
+    )
+    calibration_text, misconception_guidance = _format_response_calibration(
+        response_plans,
+        subject,
+    )
     
     if is_written:
         address_rule = "4. Written Work: DO NOT use the teacher's name or titles like 'Sir' or 'Miss' in the response. It must read entirely like an exercise book or whiteboard."
@@ -268,6 +619,11 @@ def fetch_ai_answers(
     
     Here are the compact, privacy-minimised response profiles for the students answering:
     {profiles_text}
+
+    MANDATORY RESPONSE CALIBRATION FOR THIS ATTEMPT:
+    {calibration_text}
+
+    Misconceptions in {subject}: {misconception_guidance}
     
     {instructions}
 
@@ -276,7 +632,9 @@ def fetch_ai_answers(
     
     CRITICAL PEDAGOGICAL CONSTRAINTS:
     1. Ability Match: Scale vocabulary, accuracy, length, and depth to the compact profile.
-    2. Deep Misconceptions: Inject realistic, {subject}-specific misconceptions or partial misunderstandings for lower grades.
+    2. Follow each pupil's assigned response calibration exactly. Privately solve or
+       analyse the question first, then construct the assigned outcome. Do not label,
+       diagnose or explain the error in the pupil's answer.
     3. Participation Match: Use the pupil's confidence, participation, processing and discussion style; do not invent private background information.
     {address_rule}
     5. Math Formatting: Make maths look like real maths. DO NOT use raw carets (like r^2). You MUST use Unicode superscripts (e.g., r², x³, y₁) and symbols (π, √, ÷, ×, ±). For complex equations, use LaTeX wrapped in single `$` (e.g., `$x = \\frac{{1}}{{2}}$`).
@@ -284,6 +642,10 @@ def fetch_ai_answers(
     
     CRITICAL TECHNICAL RULES:
     - Return ONLY a valid JSON dictionary where keys are exact student names and values are their answers.
+    - A misconception must be plausible enough that a teacher can probe it. Do not use
+      spelling or grammar alone as the misconception, and do not make errors silly.
+    - Do not silently repair a MISCONCEPTION, SLIP, PARTIAL or UNCERTAIN response into a
+      fully correct answer. Variation across the class is intentional.
     - If you use LaTeX, you MUST double-escape the backslashes (e.g., `\\\\frac`, `\\\\sqrt`) so the JSON parser does not crash.
     """
     
@@ -328,6 +690,15 @@ def generate_peer_discussion(
         )
         for _, row in participant_df.iterrows()
     ]
+    response_plans = build_response_calibration(
+        question,
+        participant_df,
+        subject,
+    )
+    calibration_text, misconception_guidance = _format_response_calibration(
+        response_plans,
+        subject,
+    )
     is_pair = discussion_kind == "turn_and_talk"
     turn_count = 4 if is_pair else min(6, max(4, len(participant_names)))
     format_description = (
@@ -344,6 +715,10 @@ def generate_peer_discussion(
     Simulate {format_description}. The pupils are:
     {chr(10).join(profiles)}
 
+    MANDATORY STARTING RESPONSE STATES:
+    {calibration_text}
+    Misconceptions in {subject}: {misconception_guidance}
+
     Remembered whole-class discussion before they start:
     {_afl_transcript() or "No earlier contributions."}
 
@@ -352,8 +727,10 @@ def generate_peer_discussion(
        least once, using their exact name as the speaker.
     2. Make it a real exchange: pupils should agree, question, correct, extend or
        politely challenge one another rather than deliver isolated answers.
-    3. Match each pupil's attainment, confidence, processing and discussion style.
-       Include a plausible misconception or uncertainty where their profile supports it.
+    3. Match each pupil's attainment, confidence, processing and discussion style, and
+       follow their assigned starting state. Do not label mistakes in the conversation.
+       Another pupil may notice, question or correct an error, but they should not all
+       jump immediately to a polished correct conclusion.
     4. Do not introduce the teacher as a speaker and do not invent private background.
     5. Keep each turn to one or two natural spoken sentences.
     6. Create a concise "feedback" statement in the pupils' collective voice that
@@ -746,6 +1123,11 @@ def render_academic_responses(df, cohort, subject="General"):
         "🙋 Hands Up (Volunteers)",
         "🎯 Cold Call (Interactive Probing)",
     ], horizontal=True, label_visibility="collapsed", key="afl_strategy")
+    st.caption(
+        "Response realism is active: pupils may give secure, partial or uncertain "
+        "answers and may reveal common subject misconceptions. Errors are deliberately "
+        "left unlabelled for you to diagnose and probe."
+    )
     
     st.markdown("---")
     
@@ -891,7 +1273,7 @@ def render_academic_responses(df, cohort, subject="General"):
                 instructions = (
                     "Write EXACTLY what the student would write in their exercise book. "
                     "CRITICAL REALISM BY TARGET GRADE: You MUST scale the actual quality of the English, sentence structure, and vocabulary to their specific Target Grade.\n"
-                    "- Target Grade 7-9: Flawless or near-perfect grammar. Highly articulate, structured, and fluent. No forced errors.\n"
+                    "- Target Grade 7-9: Usually controlled grammar and more articulate, structured writing, but the assigned response may still contain a conceptual error, omission or slip.\n"
                     "- Target Grade 4-6: Typical teenager. Mostly accurate, but might lack depth, use casual phrasing, or have occasional minor punctuation slips.\n"
                     "- Target Grade 1-3: Noticeably weak literacy. Use very basic vocabulary, short fragmented sentences, and struggle to articulate the 'why'. They should sound like a student with a low reading age. Inject realistic spelling errors (phonetic spelling of hard words) and crossed-out mistakes using Markdown strikethrough (~~like this~~).\n"
                     "DO NOT include any AI commentary or explanation. Output raw student work only."
