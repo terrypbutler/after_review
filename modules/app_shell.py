@@ -1,370 +1,363 @@
-"""Visual shell, navigation, and home page for the teaching studio."""
-
-from collections.abc import Mapping
-
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import altair as alt
 
-from config import APP_NAME, APP_SHORT_NAME, APP_TAGLINE, APP_VERSION
+from config import APP_NAME, COHORT_URLS
+from modules.app_shell import (
+    apply_app_styles,
+    render_home,
+    render_navigation,
+    render_sidebar_footer,
+)
+from modules.class_setup import render_subject_class_setup
+from modules.data_loader import DataLoadError, load_data
+from modules.data_utils import count_active, safe_unique
+from modules.report_renderers import render_student_card, render_photo_grid, generate_printable_html
+
+st.set_page_config(
+    page_title=APP_NAME,
+    page_icon="🎓",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+apply_app_styles()
+
+cohort_data = {}
+load_errors = {}
+for cohort_name, cohort_url in COHORT_URLS.items():
+    try:
+        cohort_data[cohort_name] = load_data(cohort_url)
+    except DataLoadError as exc:
+        cohort_data[cohort_name] = pd.DataFrame()
+        load_errors[cohort_name] = str(exc)
+
+def get_cohort_data(cohort):
+    df = cohort_data[cohort]
+    if df.empty:
+        st.error(
+            f"{cohort} data is not available right now. Refresh the cohort data "
+            "from the sidebar and try again."
+        )
+        st.stop()
+    return df
 
 
-NAV_ITEMS = [
-    "Home",
-    "Student Search",
-    "Year 7",
-    "Year 10",
-    "Analytics",
-    "Seating Plan",
-    "Simulator",
-    "Academic AfL",
-    "Lesson Stress-Tester",
-    "Observe Learning",
-]
+page = render_navigation()
+render_sidebar_footer(load_data.clear)
 
-NAV_LABELS = {
-    "Home": "⌂  Home",
-    "Student Search": "⌕  Student search",
-    "Year 7": "◫  Year 7 passports",
-    "Year 10": "◫  Year 10 passports",
-    "Analytics": "↗  Cohort analytics",
-    "Seating Plan": "▦  Seating plan",
-    "Simulator": "◉  Student roleplay",
-    "Academic AfL": "✓  Academic AfL",
-    "Lesson Stress-Tester": "⚡  Lesson stress-test",
-    "Observe Learning": "◎  Observe learning",
-}
+if page == "Home":
+    render_home(cohort_data, load_errors)
 
-
-def apply_app_styles() -> None:
-    """Apply a restrained, accessible visual system across existing pages."""
-    st.markdown(
-        """
-        <style>
-            :root {
-                --studio-ink: #152033;
-                --studio-muted: #5f6b7a;
-                --studio-blue: #3157d5;
-                --studio-teal: #0f766e;
-                --studio-line: #dce3ee;
-                --studio-panel: #ffffff;
-            }
-            .stApp {
-                background:
-                    radial-gradient(circle at 84% 6%, rgba(49, 87, 213, .08), transparent 24rem),
-                    #f7f8fc;
-            }
-            [data-testid="stSidebar"] {
-                background: linear-gradient(180deg, #101c34 0%, #182843 100%);
-                color: #f4f7ff;
-            }
-            [data-testid="stSidebar"] p,
-            [data-testid="stSidebar"] label,
-            [data-testid="stSidebar"] h1,
-            [data-testid="stSidebar"] h2,
-            [data-testid="stSidebar"] h3 {
-                color: #f4f7ff;
-            }
-            [data-testid="stSidebar"] [data-baseweb="select"] *,
-            [data-testid="stSidebar"] input {
-                color: var(--studio-ink);
-            }
-            [data-testid="stSidebar"] [data-baseweb="radio"] > div {
-                gap: .2rem;
-            }
-            [data-testid="stSidebar"] hr {
-                border-color: rgba(255,255,255,.16);
-            }
-            [data-testid="stSidebar"] .stAlert * {
-                color: var(--studio-ink);
-            }
-            .block-container {
-                max-width: 1320px;
-                padding-top: 2rem;
-                padding-bottom: 4rem;
-            }
-            h1, h2, h3 {
-                color: var(--studio-ink);
-                letter-spacing: -.025em;
-            }
-            .studio-brand {
-                padding: .3rem 0 1rem;
-            }
-            .studio-brand__eyebrow {
-                color: #94aefc;
-                font-size: .72rem;
-                font-weight: 750;
-                letter-spacing: .14em;
-                text-transform: uppercase;
-            }
-            .studio-brand__name {
-                color: white;
-                font-size: 1.35rem;
-                font-weight: 760;
-                line-height: 1.15;
-                margin-top: .35rem;
-            }
-            .studio-brand__tagline {
-                color: #c9d5ef;
-                font-size: .84rem;
-                line-height: 1.45;
-                margin-top: .5rem;
-            }
-            .studio-hero {
-                background: linear-gradient(135deg, #16233e 0%, #2547b8 65%, #0f766e 120%);
-                border-radius: 1.35rem;
-                box-shadow: 0 18px 50px rgba(20, 34, 65, .16);
-                color: white;
-                margin-bottom: 1.3rem;
-                overflow: hidden;
-                padding: clamp(1.7rem, 4vw, 3.4rem);
-                position: relative;
-            }
-            .studio-hero::after {
-                background: rgba(255,255,255,.08);
-                border-radius: 999px;
-                content: "";
-                height: 16rem;
-                position: absolute;
-                right: -5rem;
-                top: -7rem;
-                width: 16rem;
-            }
-            .studio-hero__eyebrow {
-                color: #b8c9ff;
-                font-size: .76rem;
-                font-weight: 750;
-                letter-spacing: .16em;
-                text-transform: uppercase;
-            }
-            .studio-hero h1 {
-                color: white;
-                font-size: clamp(2.15rem, 5vw, 4rem);
-                line-height: .98;
-                margin: .75rem 0 1rem;
-                max-width: 14ch;
-            }
-            .studio-hero p {
-                color: #e7ecfb;
-                font-size: 1.05rem;
-                line-height: 1.6;
-                margin: 0;
-                max-width: 48rem;
-            }
-            [data-testid="stMetric"] {
-                background: rgba(255,255,255,.94);
-                border: 1px solid var(--studio-line);
-                border-radius: 1rem;
-                box-shadow: 0 8px 24px rgba(31, 45, 73, .05);
-                height: 100%;
-                min-height: 8.4rem;
-                overflow: visible;
-                padding: 1rem 1.1rem;
-            }
-            [data-testid="stMetricLabel"],
-            [data-testid="stMetricValue"] {
-                max-width: 100%;
-                overflow: visible;
-            }
-            [data-testid="stMetricLabel"] p,
-            [data-testid="stMetricValue"] > div {
-                line-height: 1.2;
-                overflow-wrap: anywhere;
-                white-space: normal;
-                word-break: normal;
-            }
-            [data-testid="stMetricValue"] > div {
-                font-size: clamp(1.3rem, 2.15vw, 2rem);
-            }
-            .stButton > button,
-            [data-testid="stBaseButton-secondary"] {
-                background: #ffffff;
-                border: 1px solid #9aa9bd;
-                color: var(--studio-ink);
-                font-weight: 700;
-            }
-            .stButton > button *,
-            [data-testid="stBaseButton-secondary"] * {
-                color: inherit !important;
-            }
-            .stButton > button:hover,
-            [data-testid="stBaseButton-secondary"]:hover {
-                background: #edf1ff;
-                border-color: var(--studio-blue);
-                color: #17358f;
-            }
-            [data-testid="stBaseButton-primary"] {
-                background: var(--studio-blue);
-                border-color: var(--studio-blue);
-                color: #ffffff;
-                font-weight: 750;
-            }
-            [data-testid="stBaseButton-primary"] * {
-                color: #ffffff !important;
-            }
-            [data-testid="stVerticalBlockBorderWrapper"] {
-                background: rgba(255,255,255,.9);
-                border-color: var(--studio-line);
-                border-radius: 1rem;
-                box-shadow: 0 8px 24px rgba(31, 45, 73, .04);
-            }
-            .studio-kicker {
-                color: var(--studio-blue);
-                font-size: .73rem;
-                font-weight: 800;
-                letter-spacing: .12em;
-                text-transform: uppercase;
-            }
-            .studio-step {
-                align-items: flex-start;
-                display: flex;
-                gap: .8rem;
-                margin: .8rem 0;
-            }
-            .studio-step__number {
-                align-items: center;
-                background: #e9edff;
-                border-radius: 999px;
-                color: var(--studio-blue);
-                display: inline-flex;
-                flex: 0 0 1.8rem;
-                font-size: .8rem;
-                font-weight: 800;
-                height: 1.8rem;
-                justify-content: center;
-            }
-            .studio-step__copy {
-                color: var(--studio-muted);
-                line-height: 1.45;
-                padding-top: .15rem;
-            }
-            @media (max-width: 700px) {
-                .block-container { padding-top: 1rem; }
-                .studio-hero { border-radius: 1rem; }
-                .studio-hero h1 { max-width: none; }
-                [data-testid="stMetric"] { min-height: 7.5rem; }
-                [data-testid="stMetricValue"] > div { font-size: 1.35rem; }
-            }
-        </style>
-        """,
-        unsafe_allow_html=True,
+elif page == "Student Search":
+    st.title("Student search")
+    st.caption("Find a pupil quickly, then open their full context and subject report.")
+    search_cohort = st.radio("Select Cohort to Search:", ["Year 7", "Year 10"], horizontal=True)
+    df = get_cohort_data(search_cohort)
+    query = st.text_input(
+        "Search student name",
+        key="search_name",
+        placeholder="Start typing a first name or surname…",
     )
 
+    if query:
+        results = df[df["Full Name"].str.contains(query, case=False, na=False)]
+        st.write(f"Found {len(results)} students")
+        if len(results) == 0: st.warning("No matches found.")
+        for _, row in results.iterrows():
+            render_student_card(
+                row,
+                search_cohort,
+                show_projected=True,
+                report_type="Detailed",
+                class_df=df,
+            )
 
-def render_navigation() -> str:
-    st.sidebar.markdown(
-        f"""
-        <div class="studio-brand">
-            <div class="studio-brand__eyebrow">Teaching studio</div>
-            <div class="studio-brand__name">{APP_SHORT_NAME}</div>
-            <div class="studio-brand__tagline">{APP_TAGLINE}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    return st.sidebar.radio(
-        "Workspace",
-        NAV_ITEMS,
-        format_func=lambda item: NAV_LABELS[item],
-        key="studio_navigation",
-    )
+elif page == "Year 7":
+    df = get_cohort_data("Year 7")
+    st.title("Year 7 class passports")
+    st.caption("Scan the cohort, adjust the level of detail and prepare a printable view.")
+    st.sidebar.subheader("🔎 Filters (Year 7)")
+    
+    # NEW: Explicit Grouping Choice
+    grouping_style = st.sidebar.radio("View Class By:", ["Mixed Ability (Tutor Groups)", "Streamed Sets (Maths)"], key="y7_group")
+    
+    filtered_df = df.copy()
+    
+    if grouping_style == "Mixed Ability (Tutor Groups)":
+        available_forms = safe_unique(df, "Form Group")
+        selected_form = st.sidebar.selectbox("Select Tutor Group:", ["All Tutor Groups"] + available_forms, key="y7_form")
+        if selected_form != "All Tutor Groups":
+            filtered_df = filtered_df[filtered_df["Form Group"].astype(str) == selected_form]
+            
+    else:
+        available_sets = safe_unique(df, "Maths Set")
+        selected_set = st.sidebar.selectbox("Select Class Set:", ["All Sets"] + available_sets, key="y7_set")
+        if selected_set != "All Sets":
+            filtered_df = filtered_df[filtered_df["Maths Set"].astype(str) == selected_set]
 
-
-def render_sidebar_footer(on_refresh) -> None:
     st.sidebar.divider()
-    if st.sidebar.button(
-        "↻  Refresh cohort data",
-        width="stretch",
-        help="Reload the published cohort spreadsheets now.",
-    ):
-        on_refresh()
-        st.rerun()
-    st.sidebar.caption(f"Teaching Studio v{APP_VERSION} · Data cached for 5 minutes")
+    report_option = st.sidebar.radio("Select Report Detail", ["Base Passport (No Details)", "Short Report (Portrait & Home Life)", "Detailed Report (All Subjects)"])
+    
+    mode = "None"
+    if report_option == "Short Report (Portrait & Home Life)": mode = "Short"
+    elif report_option == "Detailed Report (All Subjects)": mode = "Detailed"
 
-
-def render_home(
-    cohorts: Mapping[str, pd.DataFrame],
-    load_errors: Mapping[str, str],
-) -> None:
-    st.markdown(
-        f"""
-        <section class="studio-hero">
-            <div class="studio-hero__eyebrow">Virtual classroom practice</div>
-            <h1>Plan. Rehearse. Notice more.</h1>
-            <p>{APP_NAME} brings pupil context, lesson rehearsal and live
-            observation into one focused workspace for deliberate practice.</p>
-        </section>
-        """,
-        unsafe_allow_html=True,
+    # --- THE EXPORT MENU ---
+    st.sidebar.divider()
+    st.sidebar.markdown("### 🖨️ Print & Export")
+    
+    print_selection = st.sidebar.radio(
+        "Select Content to Print",
+        ["Photo Grid Only", "Detailed Passports Only", "Both"]
     )
+    
+    html_report = generate_printable_html(filtered_df, "Year 7", mode, print_selection)
+    
+    st.sidebar.download_button(
+        label="Download Printable Report",
+        data=html_report,
+        file_name="Year7_Printable_Report.html",
+        mime="text/html",
+        help="Downloads a perfectly formatted file. Open it and press Ctrl+P to print!"
+    )
+    st.sidebar.caption("Open the downloaded file in your browser and press **Ctrl + P** for a perfect multi-page printout. *(Remember to set your printer to Landscape if printing the Photo Grid!)*")
 
-    metric_columns = st.columns(4)
-    metric_columns[0].metric("Year 7", f"{len(cohorts['Year 7'])} students")
-    metric_columns[1].metric("Year 10", f"{len(cohorts['Year 10'])} students")
-    metric_columns[2].metric("Practice tools", "5 modes")
-    metric_columns[3].metric("Classroom views", "4 views")
-
-    for cohort, message in load_errors.items():
-        st.warning(
-            f"{cohort} data is temporarily unavailable. Use “Refresh cohort data” "
-            f"when the published sheet is reachable again. ({message})"
+    st.subheader(f"Showing {len(filtered_df)} Students")
+    render_photo_grid(filtered_df, "Year 7", num_cols=5)
+    st.divider()
+    st.subheader("📄 Detailed Passports")
+    for _, row in filtered_df.iterrows():
+        render_student_card(
+            row,
+            "Year 7",
+            show_projected=True,
+            report_type=mode,
+            class_df=filtered_df,
         )
 
-    st.markdown("## Choose the work you need to do")
-    workflow_columns = st.columns(3)
-    workflows = [
-        (
-            "01 · KNOW",
-            "Know the class",
-            "Search individual profiles, scan cohort passports and spot patterns before planning.",
-            "Student Search · Year views · Analytics",
-        ),
-        (
-            "02 · PLAN",
-            "Shape the lesson",
-            "Build a seating plan and stress-test a lesson against the pupils who will experience it.",
-            "Seating Plan · Lesson Stress-Tester",
-        ),
-        (
-            "03 · REHEARSE",
-            "Practise and notice",
-            "Rehearse interactions, check understanding and circulate through simulated learning.",
-            "Simulator · Academic AfL · Observe Learning",
-        ),
-    ]
-    for column, (kicker, title, description, tools) in zip(workflow_columns, workflows):
-        with column:
-            with st.container(border=True):
-                st.markdown(f'<div class="studio-kicker">{kicker}</div>', unsafe_allow_html=True)
-                st.markdown(f"### {title}")
-                st.write(description)
-                st.caption(tools)
+elif page == "Year 10":
+    df = get_cohort_data("Year 10")
+    st.title("Year 10 class passports")
+    st.caption("Review tutor groups, sets or option classes with the context you need.")
+    st.sidebar.subheader("🔎 Filters (Year 10)")
+    
+    # NEW: 3-Way Explicit Grouping Choice
+    grouping_style = st.sidebar.radio("View Class By:", ["Mixed Ability (Tutor Groups)", "Streamed Sets (Maths/Science)", "Option Subject"], key="y10_group")
+    
+    filtered_df = df.copy()
+    
+    if grouping_style == "Mixed Ability (Tutor Groups)":
+        available_forms = safe_unique(df, "Form Group")
+        selected_form = st.sidebar.selectbox("Select Tutor Group:", ["All Tutor Groups"] + available_forms, key="y10_form")
+        if selected_form != "All Tutor Groups":
+            filtered_df = filtered_df[filtered_df["Form Group"].astype(str) == selected_form]
+            
+    elif grouping_style == "Streamed Sets (Maths/Science)":
+        available_sets = safe_unique(df, "Maths Set")
+        selected_set = st.sidebar.selectbox("Select Class Set:", ["All Sets"] + available_sets, key="y10_set")
+        if selected_set != "All Sets":
+            filtered_df = filtered_df[filtered_df["Maths Set"].astype(str) == selected_set]
+            
+    elif grouping_style == "Option Subject":
+        available_subjects = [c for c in ["Art","Computing","Design","Drama","Geography","History","Hospitality","Music","Photography","Spanish","Sport"] if c in df.columns]
+        selected_subject = st.sidebar.selectbox("Select Option Subject:", ["Select Subject..."] + available_subjects, key="y10_sub")
+        if selected_subject != "Select Subject...":
+            filtered_df = filtered_df[filtered_df[selected_subject].notna() & (filtered_df[selected_subject].astype(str).str.strip() != "")]
 
-    left, right = st.columns([1.45, 1])
-    with left:
-        st.markdown("## A simple deliberate-practice loop")
-        steps = [
-            ("1", "Select the cohort, subject and class you will teach."),
-            ("2", "Rehearse one precise part of the lesson, not the whole performance."),
-            ("3", "Review what pupils did, adapt one move, then repeat."),
+    st.sidebar.divider()
+    report_option = st.sidebar.radio("Select Report Detail", ["Base Passport (No Details)", "Short Report (KS3 & Home Life)", "Detailed Report (All Subjects)"])
+    
+    mode = "None"
+    if report_option == "Short Report (KS3 & Home Life)": mode = "Short"
+    elif report_option == "Detailed Report (All Subjects)": mode = "Detailed"
+
+    # --- THE EXPORT MENU ---
+    st.sidebar.divider()
+    st.sidebar.markdown("### 🖨️ Print & Export")
+    
+    print_selection = st.sidebar.radio(
+        "Select Content to Print",
+        ["Photo Grid Only", "Detailed Passports Only", "Both"]
+    )
+    
+    html_report = generate_printable_html(filtered_df, "Year 10", mode, print_selection)
+    
+    st.sidebar.download_button(
+        label="Download Printable Report",
+        data=html_report,
+        file_name="Year10_Printable_Report.html",
+        mime="text/html",
+        help="Downloads a perfectly formatted file. Open it and press Ctrl+P to print!"
+    )
+    st.sidebar.caption("Open the downloaded file in your browser and press **Ctrl + P** for a perfect multi-page printout. *(Remember to set your printer to Landscape if printing the Photo Grid!)*")
+
+    st.subheader(f"Showing {len(filtered_df)} Students")
+    render_photo_grid(filtered_df, "Year 10", num_cols=5)
+    st.divider()
+    st.subheader("📄 Detailed Passports")
+    for _, row in filtered_df.iterrows():
+        render_student_card(
+            row,
+            "Year 10",
+            show_projected=True,
+            report_type=mode,
+            class_df=filtered_df,
+        )
+
+elif page == "Analytics":
+    st.title("Cohort analytics")
+    st.caption("Filter the cohort to understand attainment and support needs at a glance.")
+    analytics_cohort = st.radio("Select Cohort to Analyze:", ["Year 7", "Year 10"], horizontal=True)
+    df_base = get_cohort_data(analytics_cohort)
+
+    st.sidebar.subheader("🔎 Analytics Filters")
+    selected_form = st.sidebar.multiselect("Form Tutor Group", safe_unique(df_base, "Form Group"))
+    selected_math = st.sidebar.multiselect("Maths Set", safe_unique(df_base, "Maths Set"))
+    available_subjects = [c for c in ["Eng Lang","Eng Lit","Maths","Science","Art","Computing","Design","Drama","Geography","History","Hospitality","Music","Photography","Spanish","Sport"] if c in df_base.columns]
+    selected_subject = st.sidebar.selectbox("Option Class (optional)", ["All Subjects"] + available_subjects)
+
+    df = df_base.copy()
+    if selected_form: df = df[df["Form Group"].astype(str).isin(selected_form)]
+    if selected_math: df = df[df["Maths Set"].astype(str).isin(selected_math)]
+    if selected_subject != "All Subjects": df = df[df[selected_subject].notna() & (df[selected_subject].astype(str).str.strip() != "")]
+
+    st.subheader(f"Overview: {len(df)} Students")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Students", len(df))
+    m2.metric("SEN Support", count_active(df, ["SEN Status", "SEND Status"]))
+    m3.metric("EAL", count_active(df, ["EAL", "EAL Status"]))
+    m4.metric("Pupil Premium", count_active(df, ["Disadvantaged (PP)", "Premium", "Disadvantaged", "Pupil Premium", "PP", "FSM", "Ever 6", "FSM6", "Pupil Premium Indicator"]))
+
+    st.write("---")
+    st.subheader("📈 KS2 / SATs Performance")
+    g1, g2 = st.columns(2)
+    
+    ks2_bins = [80, 85, 90, 95, 100, 105, 110, 115, 121] 
+    ks2_labels = ["80-84", "85-89", "90-94", "95-99", "100-104", "105-109", "110-114", "115-120"]
+    
+    with g1:
+        math_col = next((c for c in df.columns if c.strip().lower() in ["ks2 maths", "ks2 math", "sats maths", "SATs Maths", "maths score"]), None)
+        if math_col:
+            st.markdown("**Maths Distribution**")
+            counts = pd.cut(pd.to_numeric(df[math_col], errors='coerce').dropna(), bins=ks2_bins, labels=ks2_labels, right=False).value_counts().reindex(ks2_labels, fill_value=0)
+            st.altair_chart(alt.Chart(pd.DataFrame({"Score Range": ks2_labels, "Students": counts.values})).mark_bar(color="#3157d5", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(x=alt.X('Score Range', sort=ks2_labels, title="Scaled score"), y=alt.Y('Students', title="Students"), tooltip=["Score Range", "Students"]), width="stretch")
+        else: st.caption("*(No Maths data available)*")
+            
+    with g2:
+        read_col = next((c for c in df.columns if c.strip().lower() in ["ks2 read", "ks2 reading", "sats reading", "reading score"]), None)
+        if read_col:
+            st.markdown("**Reading Distribution**")
+            counts = pd.cut(pd.to_numeric(df[read_col], errors='coerce').dropna(), bins=ks2_bins, labels=ks2_labels, right=False).value_counts().reindex(ks2_labels, fill_value=0)
+            st.altair_chart(alt.Chart(pd.DataFrame({"Score Range": ks2_labels, "Students": counts.values})).mark_bar(color="#0f766e", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(x=alt.X('Score Range', sort=ks2_labels, title="Scaled score"), y=alt.Y('Students', title="Students"), tooltip=["Score Range", "Students"]), width="stretch")
+        else: st.caption("*(No Reading data available)*")
+
+    st.write("---")
+    st.subheader("Raw Data")
+    desired_cols = ["Full Name", "Form Group", "Maths Set", "DoB", "Gender", "SEN Status", "Disadvantaged (PP)", "Ethnicity", "EAL Status", "SATs Reading", "SATs Maths"] if analytics_cohort == "Year 7" else ["Full Name", "Form Group", "Maths Set", "DoB", "Gender", "SEN Status", "SEND Detail", "Disadvantaged (PP)", "Ethnicity", "KS2 Read", "KS2 Maths", "EAL Status", "Eng Lang Predicted Grade", "Eng Lit Predicted Grade", "Maths Predicted Grade", "Sci 1 Predicted Grade", "Sci 2 Predicted Grade", "Art Predicted Grade", "Computing Predicted Grade", "Design Predicted Grade", "Drama Predicted Grade", "Geography Predicted Grade", "History Predicted Grade", "Hospitality Predicted Grade", "Music Predicted Grade", "Photography Predicted Grade", "Spanish Predicted Grade", "Sport Predicted Grade", "Attendance %", "Suspension days"]
+    st.dataframe(df[[col for col in desired_cols if col in df.columns]], width="stretch")
+
+elif page == "Seating Plan":
+    st.title("Classroom seating planner")
+    st.caption("Build a purposeful room layout and plan where your attention will go.")
+    
+    # 1. Select the base data
+    cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
+    df_base = get_cohort_data(cohort)
+    
+    # 2. Build the sidebar filters
+    st.sidebar.subheader(f"🔎 Filters ({cohort})")
+    selected_form = st.sidebar.multiselect("Form Group (ALL by default)", safe_unique(df_base, "Form Group"), key="seat_form")
+    selected_math = st.sidebar.multiselect("Maths Set (ALL by default)", safe_unique(df_base, "Maths Set"), key="seat_math")
+    
+    # --- NEW: Year 10 Option Class Dropdown ---
+    selected_subject = "All Subjects"
+    if cohort == "Year 10":
+        subject_cols = [
+            "Eng Lang","Eng Lit","Maths","Science","Art","Computing","Design",
+            "Drama","Geography","History","Hospitality","Music","Photography",
+            "Spanish","Sport"
         ]
-        for number, copy in steps:
-            st.markdown(
-                f"""
-                <div class="studio-step">
-                    <span class="studio-step__number">{number}</span>
-                    <span class="studio-step__copy">{copy}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    with right:
-        st.markdown("## Before using AI practice")
-        with st.container(border=True):
-            st.write(
-                "Student simulations use the configured Gemini key. Voice is optional "
-                "and uses ElevenLabs when its key is present."
-            )
-            st.caption(
-                "Keep live pupil data within your school’s approved environment and "
-                "use simulations as rehearsal prompts, not as pupil judgements."
-            )
+        available_subjects = [c for c in subject_cols if c in df_base.columns]
+        selected_subject = st.sidebar.selectbox("Option Class (optional)", ["All Subjects"] + available_subjects, key="seat_sub")
+
+    # 3. Create the filtered_df
+    filtered_df = df_base.copy()
+    if selected_form: 
+        filtered_df = filtered_df[filtered_df["Form Group"].astype(str).isin(selected_form)]
+    if selected_math: 
+        filtered_df = filtered_df[filtered_df["Maths Set"].astype(str).isin(selected_math)]
+    
+    # Apply the Subject filter if it was used
+    if selected_subject != "All Subjects":
+        filtered_df = filtered_df[
+            filtered_df[selected_subject].notna() &
+            (filtered_df[selected_subject].astype(str).str.strip() != "")
+        ]
+    
+    # 4. Pass the fully filtered list into the planner
+    from modules.seating_planner import render_seating_plan
+    render_seating_plan(filtered_df, cohort)
+
+elif page == "Simulator":
+    st.title("Virtual student roleplay")
+    st.caption("Rehearse a short interaction, review the response and try one adjustment.")
+
+    # 1. Select the base data
+    cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
+    df_base = get_cohort_data(cohort)
+
+    # 2. Build the sidebar filters
+    st.sidebar.subheader(f"🔎 Filters ({cohort})")
+    selected_form = st.sidebar.multiselect("Form Group (ALL by default)", safe_unique(df_base, "Form Group"), key="sim_form")
+    selected_math = st.sidebar.multiselect("Maths Set (ALL by default)", safe_unique(df_base, "Maths Set"), key="sim_math")
+
+    # 3. Create the filtered_df
+    filtered_df = df_base.copy()
+    if selected_form: 
+        filtered_df = filtered_df[filtered_df["Form Group"].astype(str).isin(selected_form)]
+    if selected_math: 
+        filtered_df = filtered_df[filtered_df["Maths Set"].astype(str).isin(selected_math)]
+
+    # 4. Pass the FILTERED list to the simulator
+    from modules.student_simulator import render_simulator
+    render_simulator(filtered_df, cohort)
+
+elif page == "Academic AfL":
+    st.title("Academic AfL")
+    st.caption("Rehearse whole-class checks for understanding and responsive questioning.")
+    cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
+    df_base = get_cohort_data(cohort)
+    selected_subject, filtered_df = render_subject_class_setup(
+        df_base,
+        cohort,
+        key_prefix="afl",
+        subject_label="What subject are you teaching?",
+    )
+    from modules.academic_responses import render_academic_responses
+    render_academic_responses(filtered_df, cohort, selected_subject)
+
+elif page == "Lesson Stress-Tester":
+    st.title("Lesson stress-tester")
+    st.caption("Test one lesson against this class before you teach it.")
+    cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
+    df_base = get_cohort_data(cohort)
+    selected_subject, filtered_df = render_subject_class_setup(
+        df_base,
+        cohort,
+        key_prefix="stress",
+    )
+    from modules.lesson_stress_tester import render_stress_tester
+    render_stress_tester(filtered_df, cohort, selected_subject)
+
+elif page == "Observe Learning":
+    st.title("Observe learning")
+    st.caption("Circulate through a simulated class and practise noticing before intervening.")
+    cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
+    df_base = get_cohort_data(cohort)
+    _, filtered_df = render_subject_class_setup(
+        df_base,
+        cohort,
+        key_prefix="observation",
+    )
+    from modules.observe_learning import render_observation_room
+    render_observation_room(filtered_df, cohort)
