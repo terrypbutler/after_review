@@ -107,6 +107,16 @@ elif page == "Year 7":
     if report_option == "Short Report (Portrait & Home Life)": mode = "Short"
     elif report_option == "Detailed Report (All Subjects)": mode = "Detailed"
 
+    include_relationships = st.sidebar.toggle(
+        "Include student relationships",
+        value=False,
+        key="y7_include_relationships",
+        help=(
+            "Show Preferred Peers and Pairing Considerations from the spreadsheet "
+            "at the bottom of each passport and in passport downloads."
+        ),
+    )
+
     # --- THE EXPORT MENU ---
     st.sidebar.divider()
     st.sidebar.markdown("### 🖨️ Print & Export")
@@ -116,7 +126,13 @@ elif page == "Year 7":
         ["Photo Grid Only", "Detailed Passports Only", "Both"]
     )
     
-    html_report = generate_printable_html(filtered_df, "Year 7", mode, print_selection)
+    html_report = generate_printable_html(
+        filtered_df,
+        "Year 7",
+        mode,
+        print_selection,
+        include_relationships=include_relationships,
+    )
     
     st.sidebar.download_button(
         label="Download Printable Report",
@@ -139,6 +155,7 @@ elif page == "Year 7":
             show_projected=True,
             report_type=mode,
             class_df=filtered_df,
+            show_relationships=include_relationships,
         )
 
 elif page == "Year 10":
@@ -177,6 +194,16 @@ elif page == "Year 10":
     if report_option == "Short Report (KS3 & Home Life)": mode = "Short"
     elif report_option == "Detailed Report (All Subjects)": mode = "Detailed"
 
+    include_relationships = st.sidebar.toggle(
+        "Include student relationships",
+        value=False,
+        key="y10_include_relationships",
+        help=(
+            "Show Preferred Peers and Pairing Considerations from the spreadsheet "
+            "at the bottom of each passport and in passport downloads."
+        ),
+    )
+
     # --- THE EXPORT MENU ---
     st.sidebar.divider()
     st.sidebar.markdown("### 🖨️ Print & Export")
@@ -186,7 +213,13 @@ elif page == "Year 10":
         ["Photo Grid Only", "Detailed Passports Only", "Both"]
     )
     
-    html_report = generate_printable_html(filtered_df, "Year 10", mode, print_selection)
+    html_report = generate_printable_html(
+        filtered_df,
+        "Year 10",
+        mode,
+        print_selection,
+        include_relationships=include_relationships,
+    )
     
     st.sidebar.download_button(
         label="Download Printable Report",
@@ -209,6 +242,7 @@ elif page == "Year 10":
             show_projected=True,
             report_type=mode,
             class_df=filtered_df,
+            show_relationships=include_relationships,
         )
 
 elif page == "Analytics":
