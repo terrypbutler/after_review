@@ -779,6 +779,25 @@ def generate_peer_discussion(
     return {"turns": [], "feedback": ""}
 
 
+def _remember_peer_result_for_class(
+    result_kind,
+    speaker_label,
+    feedback,
+    discussion_kind,
+    result_context,
+):
+    """Keep listen-in turns private; remember only feedback spoken to the class."""
+    if result_kind != "feedback":
+        return False
+    return _append_afl_comment(
+        "student",
+        speaker_label,
+        feedback,
+        source="peer-discussion",
+        marker=f"{discussion_kind}::{result_context}::feedback",
+    )
+
+
 def _render_peer_discussion_strategy(
     df,
     cohort,
@@ -803,8 +822,9 @@ def _render_peer_discussion_strategy(
             if is_pair
             else "Select a saved table group."
         )
-        + " Listen to their exchange, or simulate it privately and hear only "
-        "the feedback they would share with the class."
+        + " Pupils in the selected pair/table can hear one another, but the rest "
+        "of the class cannot hear this private exchange. Only 'Feedback to class' "
+        "enters the shared class discussion."
     )
 
     if not groups:
@@ -930,16 +950,13 @@ def _render_peer_discussion_strategy(
                     "conversation_audio": conversation_audio,
                     "autoplay": bool(conversation_audio),
                 }
-                for index, turn in enumerate(discussion["turns"]):
-                    _append_afl_comment(
-                        "student",
-                        turn["speaker"],
-                        turn["dialogue"],
-                        source="peer-discussion",
-                        marker=(
-                            f"{discussion_kind}::{result_context}::turn::{index}"
-                        ),
-                    )
+                _remember_peer_result_for_class(
+                    "conversation",
+                    f"{selected_group['location']} feedback",
+                    discussion["feedback"],
+                    discussion_kind,
+                    result_context,
+                )
             else:
                 # Deliberately discard the private turns so only feedback is shared.
                 st.session_state[result_key] = {
@@ -947,12 +964,12 @@ def _render_peer_discussion_strategy(
                     "kind": "feedback",
                     "feedback": discussion["feedback"],
                 }
-                _append_afl_comment(
-                    "student",
+                _remember_peer_result_for_class(
+                    "feedback",
                     f"{selected_group['location']} feedback",
                     discussion["feedback"],
-                    source="peer-discussion",
-                    marker=f"{discussion_kind}::{result_context}::feedback",
+                    discussion_kind,
+                    result_context,
                 )
 
     result = st.session_state.get(result_key)
@@ -961,7 +978,11 @@ def _render_peer_discussion_strategy(
 
     st.markdown("---")
     if result["kind"] == "conversation":
-        st.markdown("#### Conversation")
+        st.markdown("#### Private conversation")
+        st.caption(
+            "You are listening in. Other pairs and tables cannot hear these turns, "
+            "and they have not been added to the shared class discussion."
+        )
         if result.get("conversation_audio"):
             should_autoplay = bool(result.get("autoplay"))
             st.audio(
