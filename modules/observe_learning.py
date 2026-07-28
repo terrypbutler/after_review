@@ -31,6 +31,217 @@ def get_flexible_text(row, possible_names):
                 return val
     return "None recorded"
 
+
+def _observation_metric(row, possible_names, default=50.0):
+    text = get_flexible_text(row, possible_names)
+    match = re.search(r"-?\d+(?:\.\d+)?", str(text))
+    if not match:
+        return float(default)
+    try:
+        return max(0.0, min(100.0, float(match.group(0))))
+    except ValueError:
+        return float(default)
+
+
+def _has_observation_signal(row, possible_names, terms):
+    text = " | ".join(
+        get_flexible_text(row, [column])
+        for column in possible_names
+    ).casefold()
+    return any(term in text for term in terms)
+
+
+def build_student_observation_state(row, rng=random):
+    """Create a work-ready starting state from non-sensitive spreadsheet fields."""
+    participation = _observation_metric(row, ["Participation Level"])
+    confidence = _observation_metric(row, ["Academic Confidence"])
+    independence = _observation_metric(row, ["Independence"])
+    processing_speed = _observation_metric(row, ["Processing Speed"])
+
+    motivation = (
+        50
+        + 0.16 * participation
+        + 0.12 * confidence
+        + 0.10 * independence
+        + rng.randint(-5, 5)
+    )
+    if _has_observation_signal(
+        row,
+        ["Typical Learning Barrier", "Peer Discussion Style"],
+        ("low motivation", "task avoidance", "refuses", "disengage"),
+    ):
+        motivation -= 8
+
+    decay_rate = (
+        2
+        + (100 - independence) / 28
+        + (100 - processing_speed) / 55
+    )
+    if _has_observation_signal(
+        row,
+        ["Typical Learning Barrier", "Peer Discussion Style"],
+        ("distract", "loses focus", "off task", "off-task", "restless"),
+    ):
+        decay_rate += 1.5
+
+    work_rate = 0.72 + processing_speed / 220 + independence / 300
+
+    return {
+        "motivation": int(max(38, min(92, round(motivation)))),
+        "progress": 0,
+        "decay_rate": int(max(2, min(9, round(decay_rate)))),
+        "work_rate": max(0.65, min(1.45, work_rate)),
+        "participation": participation,
+        "confidence": confidence,
+        "independence": independence,
+        "processing_speed": processing_speed,
+        "current_event": None,
+        "current_event_kind": None,
+        "last_toilet_minute": None,
+    }
+
+
+def _weighted_observation_sample(candidates, count, rng=random):
+    """Select weighted candidates without allowing duplicate events."""
+    if count <= 0 or not candidates:
+        return []
+    ranked = sorted(
+        candidates,
+        key=lambda item: rng.random() ** (1.0 / max(0.1, item[1])),
+        reverse=True,
+    )
+    return [name for name, _weight in ranked[:count]]
+
+
+def assign_classroom_events(
+    active_names,
+    df,
+    student_states,
+    current_minute,
+    rng=random,
+):
+    """Allocate rare interruptions and frequent work questions at class level."""
+    row_lookup = {
+        str(row.get("Full Name")): row
+        for _, row in df.iterrows()
+    }
+    eligible_names = [
+        name
+        for name in active_names
+        if name in row_lookup
+        and name in student_states
+        and student_states[name].get("progress", 0) < 100
+    ]
+    if not eligible_names:
+        return {}
+
+    events = {}
+    question_candidates = []
+    for name in eligible_names:
+        row = row_lookup[name]
+        stats = student_states[name]
+        question_weight = 1.0
+        question_weight += max(0.0, (58 - stats.get("confidence", 50)) / 18)
+        question_weight += max(
+            0.0,
+            (58 - stats.get("processing_speed", 50)) / 20,
+        )
+        question_weight += max(
+            0.0,
+            (55 - stats.get("independence", 50)) / 24,
+        )
+        if _has_observation_signal(
+            row,
+            ["Typical Learning Barrier", "Helpful Scaffold", "Current Learning Target"],
+            (
+                "reassurance",
+                "clarif",
+                "instruction",
+                "next step",
+                "ask",
+                "check",
+                "uncertain",
+            ),
+        ):
+            question_weight += 2.0
+        if stats.get("participation", 50) < 28:
+            question_weight *= 0.65
+        question_candidates.append((name, question_weight))
+
+    question_count = max(
+        1,
+        min(3, int(len(eligible_names) * 0.08 + 0.5)),
+    )
+    question_prompts = (
+        "You have a specific question about how to complete the next part of the work.",
+        "You want the teacher to check whether your method or interpretation is on the right track.",
+        "You need clarification of one instruction before you can continue confidently.",
+        "You have noticed something in the task and want to ask a relevant follow-up question.",
+    )
+    for name in _weighted_observation_sample(
+        question_candidates,
+        question_count,
+        rng,
+    ):
+        events[name] = {
+            "kind": "work_question",
+            "context": rng.choice(question_prompts),
+        }
+
+    # Toilet requests are a rare whole-class event, not a 5% roll per pupil.
+    if rng.randint(1, 100) <= 3:
+        toilet_candidates = [
+            name
+            for name in eligible_names
+            if name not in events
+            and (
+                student_states[name].get("last_toilet_minute") is None
+                or current_minute
+                - student_states[name].get("last_toilet_minute", 0)
+                >= 60
+            )
+        ]
+        if toilet_candidates:
+            chosen = rng.choice(toilet_candidates)
+            events[chosen] = {
+                "kind": "toilet",
+                "context": "You need to ask to go to the toilet.",
+            }
+            student_states[chosen]["last_toilet_minute"] = current_minute
+
+    # Peer complaints are capped at one and require recorded distraction signals.
+    if rng.randint(1, 100) <= 6:
+        peer_candidates = []
+        for name in eligible_names:
+            if name in events or student_states[name].get("motivation", 100) >= 48:
+                continue
+            row = row_lookup[name]
+            if _has_observation_signal(
+                row,
+                ["Typical Learning Barrier", "Peer Discussion Style"],
+                (
+                    "distract",
+                    "chatty",
+                    "off task",
+                    "off-task",
+                    "side conversation",
+                    "socialis",
+                ),
+            ):
+                peer_candidates.append(name)
+        if peer_candidates:
+            chosen = rng.choice(peer_candidates)
+            events[chosen] = {
+                "kind": "peer_distraction",
+                "context": (
+                    "A nearby pupil has briefly distracted you and you want help "
+                    "returning to the work."
+                ),
+            }
+
+    return events
+
+
 def render_observation_room(df, cohort):
     if "seating_plans" not in st.session_state:
         st.session_state.seating_plans = {}
@@ -99,6 +310,14 @@ def render_observation_room(df, cohort):
             for name in df["Full Name"].tolist()
             if name in active_set
         ]
+        for name in st.session_state.obs_active_students:
+            matching_rows = df[df["Full Name"] == name]
+            if matching_rows.empty:
+                continue
+            defaults = build_student_observation_state(matching_rows.iloc[0])
+            existing = st.session_state.student_states.setdefault(name, {})
+            for key, value in defaults.items():
+                existing.setdefault(key, value)
 
     # --- 2. THE 1-ON-1 INTERVENTION VIEW ---
     if st.session_state.obs_intervene_target:
@@ -195,6 +414,7 @@ def render_observation_room(df, cohort):
                         st.session_state.student_states[target_name]["motivation"] = new_mot
                         
                         st.session_state.student_states[target_name]["current_event"] = None
+                        st.session_state.student_states[target_name]["current_event_kind"] = None
                         
                         if delta > 0:
                             st.success(f"📈 Motivation increased by {delta}% (Now {new_mot}%)")
@@ -227,6 +447,10 @@ def render_observation_room(df, cohort):
     # --- 3. THE FULL ROOM VIEW ---
     else:
         st.markdown("### 1. Set the Independent Task")
+        st.caption(
+            "The room is calibrated to be mainly purposeful. Work-related questions "
+            "are common; toilet requests and peer disruption are rare class-level events."
+        )
         current_task = st.text_area("Describe the task:", placeholder="e.g., 'Copy the perspective drawing.'", value=st.session_state.obs_task)
         
         col_dur, col_up = st.columns(2)
@@ -260,15 +484,9 @@ def render_observation_room(df, cohort):
                 
                 for _, row in df.iterrows():
                     name = row["Full Name"]
-                    grade = get_flexible_text(row, ["Projected Grade", "Predicted Grade"])
-                    sen = get_flexible_text(row, ["SEN Status", "SEND Status"])
-                    
-                    st.session_state.student_states[name] = {
-                        "motivation": random.randint(60, 90) if "7" in grade or "8" in grade or "9" in grade else random.randint(30, 60),
-                        "progress": 0,
-                        "decay_rate": random.randint(10, 20) if sen and sen.upper() != "NONE" else random.randint(5, 12),
-                        "current_event": None
-                    }
+                    st.session_state.student_states[name] = (
+                        build_student_observation_state(row)
+                    )
                 
                 st.session_state.live_observations = {name: "Waiting for task to begin." for name in st.session_state.obs_active_students}
                 st.rerun()
@@ -291,8 +509,13 @@ def render_observation_room(df, cohort):
                             
                             profiles = []
                             for name in st.session_state.obs_active_students:
-                                mot = st.session_state.student_states[name]["motivation"]
-                                profiles.append(f"- {name} | Motivation: {mot}%")
+                                stats = st.session_state.student_states[name]
+                                profiles.append(
+                                    f"- {name} | Readiness: {stats['motivation']}% | "
+                                    f"Participation: {stats['participation']:.0f}/100 | "
+                                    f"Independence: {stats['independence']:.0f}/100 | "
+                                    f"Processing speed: {stats['processing_speed']:.0f}/100"
+                                )
                             
                             start_prompt = (
                                 "**[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**\n"
@@ -300,12 +523,13 @@ def render_observation_room(df, cohort):
                                 f"The teacher has just said 'Go!'. We are simulating the critical first {step_minutes} minutes.\n"
                                 f"Current Class Profiles:\n{chr(10).join(profiles)}\n\n"
                                 "CRITICAL RULES:\n"
-                                "1. Determine exactly when each student engages with the task based on their motivation.\n"
-                                "   - Motivation >70: Engages immediately (0:00 to 0:45).\n"
-                                "   - Motivation 40-70: Delayed start (1:00 to 3:30).\n"
-                                f"   - Motivation <40: Fails to start within {step_minutes} minutes (return 'Failed').\n"
-                                "2. Provide a 1-sentence description of their start-up behavior.\n"
-                                "3. Return ONLY a JSON dictionary where keys are names and values are dicts containing 'time' and 'desc'.\n"
+                                "1. Model a purposeful but varied classroom. Most pupils should begin the work.\n"
+                                "   - Readiness >70: usually engages within 0:00 to 0:45.\n"
+                                "   - Readiness 50-70: usually engages within 0:30 to 2:30.\n"
+                                f"   - Readiness <50: may need settling or reassurance, but should still make an attempt within {step_minutes} minutes unless the data strongly supports non-start.\n"
+                                "2. Across the class, at least 80% should start during this window. Return 'Failed' only for a small, data-supported minority.\n"
+                                "3. Describe observable work-start behaviour: reading instructions, writing, organising equipment, checking an example or raising a work-related question. Do not invent toilet requests or peer disruption.\n"
+                                "4. Return ONLY a JSON dictionary where keys are names and values are dicts containing 'time' and 'desc'.\n"
                             )
                             
                             with st.spinner("Watching the room settle..."):
@@ -345,18 +569,19 @@ def render_observation_room(df, cohort):
                             global_prompt_injection = ""
                             
                             dice_roll = random.randint(1, 100)
-                            if dice_roll <= 2:
+                            if dice_roll <= 1:
                                 st.session_state.obs_global_event = "It has started snowing heavily outside the window."
                                 global_prompt_injection = f"URGENT GLOBAL EVENT: {st.session_state.obs_global_event} Everyone is distracted."
                                 st.toast("❄️ It started snowing!", icon="❄️")
-                            elif dice_roll <= 5:
+                            elif dice_roll <= 2:
                                 st.session_state.obs_global_event = "A large wasp has flown into the classroom."
                                 global_prompt_injection = f"URGENT GLOBAL EVENT: {st.session_state.obs_global_event} Students are reacting or panicking."
                                 st.toast("🐝 A wasp flew in!", icon="🐝")
 
                             for name in st.session_state.obs_active_students:
                                 stats = st.session_state.student_states[name]
-                                stats["current_event"] = None 
+                                stats["current_event"] = None
+                                stats["current_event_kind"] = None
                                 
                                 if st.session_state.obs_global_event:
                                     stats["motivation"] = max(0, stats["motivation"] - random.randint(20, 40))
@@ -364,25 +589,38 @@ def render_observation_room(df, cohort):
                                     decay_amount = int(stats["decay_rate"] * time_multiplier)
                                     stats["motivation"] = max(0, stats["motivation"] - decay_amount)
                                 
-                                if stats["motivation"] > 40:
-                                    prog_amount = int(random.randint(10, 25) * time_multiplier)
+                                if stats["motivation"] > 30:
+                                    prog_amount = int(
+                                        random.randint(12, 28)
+                                        * time_multiplier
+                                        * stats.get("work_rate", 1.0)
+                                    )
                                     stats["progress"] = min(100, stats["progress"] + prog_amount)
 
-                                if not st.session_state.obs_global_event:
-                                    indiv_roll = random.randint(1, 100)
-                                    if indiv_roll <= 5:
-                                        stats["current_event"] = "You need to go to the toilet."
-                                    elif indiv_roll <= 12 and stats["motivation"] > 60:
-                                        stats["current_event"] = "You are stuck on the current task and need the teacher to explain the next step."
-                                    elif indiv_roll <= 18 and stats["motivation"] < 50:
-                                        stats["current_event"] = "The person next to you is distracting you and you want to complain to the teacher."
+                            if not st.session_state.obs_global_event:
+                                class_events = assign_classroom_events(
+                                    st.session_state.obs_active_students,
+                                    df,
+                                    st.session_state.student_states,
+                                    st.session_state.obs_time_elapsed,
+                                )
+                                for name, event in class_events.items():
+                                    stats = st.session_state.student_states[name]
+                                    stats["current_event"] = event["context"]
+                                    stats["current_event_kind"] = event["kind"]
 
                             profiles = []
                             for name in st.session_state.obs_active_students:
                                 mot = st.session_state.student_states[name]["motivation"]
                                 prog = st.session_state.student_states[name]["progress"]
                                 has_event = st.session_state.student_states[name].get("current_event") is not None
-                                evt_string = " | STATUS: Has their hand up waiting for the teacher." if has_event else ""
+                                event_kind = st.session_state.student_states[name].get("current_event_kind")
+                                evt_string = (
+                                    f" | STATUS: Has their hand up waiting for the teacher "
+                                    f"(internal event type: {event_kind})."
+                                    if has_event
+                                    else ""
+                                )
                                 profiles.append(f"- {name} | Motivation: {mot}% | Progress: {prog}%{evt_string}")
                             
                             obs_prompt = (
@@ -392,9 +630,11 @@ def render_observation_room(df, cohort):
                                 f"Generate a 1-sentence physical observation of each student based on their numbers and STATUS.\n"
                                 f"{chr(10).join(profiles)}\n\n"
                                 "RULES:\n"
-                                "1. If a student's STATUS says they have their hand up, your observation MUST describe them physically raising their hand. Do NOT guess why their hand is up.\n"
-                                "2. Otherwise, if motivation > 70%, they are focused. If 40-70%, distracted. If <40%, off-task. If progress 100%, finished.\n"
-                                "3. Return ONLY a raw JSON dict with names as keys and observations as values."
+                                "1. If a student's STATUS says they have their hand up, describe them physically raising their hand. Do not announce the hidden reason.\n"
+                                "2. Otherwise, show purposeful work by default: reading, writing, calculating, checking, editing or using the resource. Motivation >65 is focused; 45-65 is mainly working with an occasional pause; 30-45 is working intermittently; only below 30 is clearly off-task.\n"
+                                "3. Do not invent toilet requests, conversations or peer distraction unless an explicit STATUS or global event requires it. Avoid making neighbouring pupils distract one another by default.\n"
+                                "4. Vary the observations and show progress through the actual task rather than repeatedly describing attention alone.\n"
+                                "5. Return ONLY a raw JSON dict with names as keys and observations as values."
                             )
                             
                             with st.spinner(f"Scanning {len(st.session_state.obs_active_students)} students..."):
@@ -423,15 +663,9 @@ def render_observation_room(df, cohort):
                         
                         for name in st.session_state.obs_active_students:
                             row = df[df["Full Name"] == name].iloc[0]
-                            grade = get_flexible_text(row, ["Projected Grade", "Predicted Grade"])
-                            sen = get_flexible_text(row, ["SEN Status", "SEND Status"])
-                            
-                            st.session_state.student_states[name] = {
-                                "motivation": random.randint(60, 90) if "7" in grade or "8" in grade or "9" in grade else random.randint(30, 60),
-                                "progress": 0,
-                                "decay_rate": random.randint(10, 20) if sen and sen.upper() != "NONE" else random.randint(5, 12),
-                                "current_event": None
-                            }
+                            st.session_state.student_states[name] = (
+                                build_student_observation_state(row)
+                            )
                         
                         st.session_state.live_observations = {name: "Waiting for task to begin." for name in st.session_state.obs_active_students}
                         st.rerun()
