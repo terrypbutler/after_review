@@ -1,9 +1,11 @@
 import streamlit as st
 import pandas as pd
 import base64
+import hashlib
 from html import escape
 from io import BytesIO
 from config import CACHE_TTL
+from modules.data_utils import suggest_working_group
 from modules.photo_utils import display_student_photo, get_student_photo
 
 
@@ -22,7 +24,13 @@ def get_flexible_text(row, possible_names):
                 return val
     return None
 
-def render_student_card(row, cohort, show_projected=True, report_type="None"):
+def render_student_card(
+    row,
+    cohort,
+    show_projected=True,
+    report_type="None",
+    class_df=None,
+):
     name = row.get("Full Name", "Unknown")
     
     with st.expander(f"👤 {name}"):
@@ -64,7 +72,54 @@ def render_student_card(row, cohort, show_projected=True, report_type="None"):
                 
         with right:
             display_student_photo(name, cohort)
-            
+
+        if class_df is not None and not class_df.empty:
+            class_names = sorted(
+                {
+                    str(value).strip()
+                    for value in class_df.get("Full Name", pd.Series(dtype=str))
+                    if str(value).strip()
+                },
+                key=str.casefold,
+            )
+            class_signature = hashlib.sha1(
+                f"{cohort}|{name}|{'|'.join(class_names)}".encode("utf-8")
+            ).hexdigest()[:12]
+            result_key = f"working_group_result_{class_signature}"
+
+            st.markdown("#### 👥 Working group")
+            if st.button(
+                "Suggest a working group",
+                key=f"working_group_button_{class_signature}",
+                help=(
+                    "Build a group of four from the class currently shown, "
+                    "prioritising preferred peers and excluding pairing concerns."
+                ),
+            ):
+                st.session_state[result_key] = suggest_working_group(
+                    row,
+                    class_df,
+                    group_size=4,
+                )
+
+            if result_key in st.session_state:
+                peers = st.session_state[result_key]
+                if peers:
+                    st.success(
+                        "**Recommended group:** "
+                        + " · ".join([str(name), *peers])
+                    )
+                    st.caption(
+                        "Uses the current filtered class, prioritises recorded "
+                        "working relationships and excludes pairing concerns "
+                        "in either direction."
+                    )
+                else:
+                    st.warning(
+                        "No compatible group is available in the current class "
+                        "selection."
+                    )
+
         st.divider()
         if show_projected:
             proj = get_flexible_text(row, ["Projected Grade", "Predicted Grade"])
