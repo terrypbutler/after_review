@@ -341,6 +341,26 @@ elif page == "Lesson Stress-Tester":
     from modules.lesson_stress_tester import render_stress_tester
     render_stress_tester(filtered_df, cohort, selected_subject)
 
+elif page == "Sequence Evaluator":
+    st.title("Sequence of learning evaluator")
+    st.caption(
+        "Evaluate curriculum progression, lesson-to-lesson coherence and how well "
+        "a class can access the whole sequence."
+    )
+    cohort = st.radio(
+        "Select Class:",
+        ["Year 7", "Year 10"],
+        horizontal=True,
+    )
+    df_base = get_cohort_data(cohort)
+    selected_subject, filtered_df = render_subject_class_setup(
+        df_base,
+        cohort,
+        key_prefix="sequence",
+    )
+    from modules.sequence_learning_evaluator import render_sequence_evaluator
+    render_sequence_evaluator(filtered_df, cohort, selected_subject)
+
 elif page == "Observe Learning":
     st.title("Observe learning")
     st.caption("Circulate through a simulated class and practise noticing before intervening.")
