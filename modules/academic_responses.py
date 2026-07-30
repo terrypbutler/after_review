@@ -10,7 +10,11 @@ from io import BytesIO
 import wave
 from PIL import Image
 from config import REACTION_MODEL
-from modules.app_shell import get_teacher_display_name
+from modules.app_shell import (
+    get_teacher_address_instruction,
+    get_teacher_address_options,
+    get_teacher_display_name,
+)
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
@@ -204,10 +208,12 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
         str(subject).strip().casefold(),
         "Use an authentic question-specific error from the subject.",
     )
+    address_instruction = get_teacher_address_instruction(teacher_name)
+    example_address = get_teacher_address_options(teacher_name)[-1]
 
     chat_prompt = f"""
     You are roleplaying as {target_name}, a {cohort} student.
-    The subject is {subject}. The teacher must be addressed exactly as "{teacher_name}".
+    The subject is {subject}. {address_instruction}
     Use this compact pupil response profile:
     {response_profile}
 
@@ -224,8 +230,7 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
     2. Remember every earlier contribution. If asked about another student's answer,
        explicitly agree, disagree, correct, extend or improve it in a realistic way.
     3. Do not claim that another student's comment was your own.
-       Never substitute "Sir", "Miss" or another title for "{teacher_name}" unless
-       that is exactly the supplied teacher name/title.
+       Use only the permitted teacher addresses above when one is needed.
     4. Match the student's likely attainment and needs. Do not automatically become
        correct just because the teacher probes. Reveal the pupil's thinking; self-correct
        only when the latest prompt or a classmate has supplied a genuinely useful scaffold.
@@ -234,7 +239,7 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
     6. Return a raw JSON object with exactly two keys: "dialogue" and "emotion".
 
     Example:
-    {{"dialogue": "I agree with Alex about the first step, but I think we divide by 2 next, {teacher_name}.", "emotion": "hesitant"}}
+    {{"dialogue": "I agree with Alex about the first step, but I think we divide by 2 next, {example_address}.", "emotion": "hesitant"}}
     """
 
     model = genai.GenerativeModel(REACTION_MODEL)
@@ -823,18 +828,15 @@ def fetch_ai_answers(
         response_plans,
         subject,
     )
+    address_instruction = get_teacher_address_instruction(teacher_name)
     
     if is_written:
         address_rule = "4. Written Work: DO NOT use the teacher's name or titles like 'Sir' or 'Miss' in the response. It must read entirely like an exercise book or whiteboard."
     else:
-        address_rule = (
-            f"4. Teacher Address: The exact teacher name/title is '{teacher_name}'. "
-            f"Students may use '{teacher_name}' naturally, but MUST NOT replace it "
-            "with 'Sir', 'Miss' or another name/title."
-        )
+        address_rule = f"4. Teacher Address: {address_instruction}"
     
     prompt = f"""
-    A trainee teacher whose exact name/title is '{teacher_name}' is conducting a
+    A trainee teacher identified as '{teacher_name}' is conducting a
     {subject} lesson for a class of {cohort} students (approximate age: {age_context}).
     The teacher has asked the class: "{question}"
     
@@ -934,12 +936,12 @@ def generate_peer_discussion(
         if is_pair
         else "a table group discussing the question together"
     )
+    address_instruction = get_teacher_address_instruction(teacher_name)
 
     prompt = f"""
     **[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**
     A {cohort} {subject} class has been asked: "{question}"
-    The teacher must be addressed exactly as "{teacher_name}". Do not replace this
-    with "Sir", "Miss" or another title.
+    {address_instruction}
 
     Simulate {format_description}. The pupils are:
     {chr(10).join(profiles)}
@@ -1373,7 +1375,12 @@ def render_academic_responses(df, cohort, subject="General"):
         cohort,
     )
     teacher_name = get_teacher_display_name()
-    class_context = f"{plan_key}|{subject}|{teacher_name.casefold()}"
+    teacher_addresses = get_teacher_address_options(teacher_name)
+    address_context = "|".join(
+        address.casefold()
+        for address in teacher_addresses
+    )
+    class_context = f"{plan_key}|{subject}|{address_context}"
     previous_context = st.session_state.get("afl_class_context")
     if previous_context and previous_context != class_context:
         _reset_academic_afl_state()
@@ -1417,9 +1424,13 @@ def render_academic_responses(df, cohort, subject="General"):
 
     # --- 1. THE INPUT AREA ---
     st.markdown("### 1. Present the Material")
+    address_labels = " or ".join(
+        f"**{address}**"
+        for address in teacher_addresses
+    )
     st.caption(
-        f"Teacher name/title: **{teacher_name}** · Change this using the shared "
-        "sidebar field."
+        f"Teacher speaker label: **{teacher_name}** · Pupils may address you as "
+        f"{address_labels}. Change this in the sidebar."
     )
     teacher_question = st.text_area(
         "Ask the class your opening question:",
