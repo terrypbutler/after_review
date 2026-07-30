@@ -34,6 +34,10 @@ def render_simulator(df, cohort):
     col_header1, col_header2 = st.columns([3, 1])
     with col_header1:
         st.subheader("🤖 Virtual Student Simulator")
+        st.caption(
+            "A profile-informed prediction for rehearsal—not evidence of what this "
+            "pupil will definitely say or do."
+        )
     with col_header2:
         enable_voice = st.toggle("🔊 Voice Audio", value=True, key="sim_voice_toggle")
 
@@ -52,7 +56,7 @@ def render_simulator(df, cohort):
 
     row = df[df["Full Name"] == selected_student].iloc[0]
 
-    age = "11" if cohort == "Year 7" else "15"
+    age_context = "11 to 12" if cohort == "Year 7" else "14 to 15"
     sen = get_flexible_text(row, ["SEN Status", "SEND Status", "SEN Detail"])
     home_life = get_flexible_text(row, ["Home Life & Interests", "Home Life", "Interests"])
     predicted = get_flexible_text(row, ["Projected Grade", "Predicted Grade"])
@@ -126,16 +130,22 @@ def render_simulator(df, cohort):
             example_address = teacher_addresses[-1]
 
             system_prompt = (
-                f"You are roleplaying as a {age}-year-old UK student named {selected_student}.\n"
+                f"You are roleplaying as a UK student aged {age_context} named {selected_student}.\n"
                 f"Compact pupil response profile: {response_profile}\n"
                 f"Scenario: {scenario}.\n\n"
+                "Generate the most plausible next response predicted from the pupil's "
+                "age, attainment, confidence, participation, processing, independence, "
+                "language and recorded behaviour. This is a rehearsal prediction, not "
+                "an observed fact about the pupil.\n"
                 f"{address_instruction}\n\n"
                 f"Transcript:\n{transcript}\n\n"
                 "CRITICAL RULES:\n"
                 f"1. Respond as {selected_student}. Keep it short (1-3 sentences).\n"
                 "2. MUST include non-verbal body language wrapped in asterisks (e.g., *rolls eyes*, *sighs*).\n"
-                "3. Determine the student's current emotion based on the scenario and teacher's prompt. Pick ONE: [neutral, angry, defensive, sad, bored, hesitant, excited, eager].\n"
-                "4. You MUST return your response as a raw JSON object with two keys: \"dialogue\" and \"emotion\".\n\n"
+                "3. Do not make the pupil unusually articulate, compliant or instantly corrected. An age-natural 'I don't know', fragment, silence or refusal is valid when supported by the profile and context.\n"
+                "4. If the exchange is academic, preserve a probable or possible subject misconception instead of silently correcting it.\n"
+                "5. Determine the student's current emotion based on the scenario and teacher's prompt. Pick ONE: [neutral, angry, defensive, sad, bored, hesitant, excited, eager].\n"
+                "6. You MUST return your response as a raw JSON object with two keys: \"dialogue\" and \"emotion\".\n\n"
                 "Example Format:\n"
                 f"{{\"dialogue\": \"*crosses arms* I don't know why you're picking on "
                 f"me, {example_address}.\", \"emotion\": \"defensive\"}}"
