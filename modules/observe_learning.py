@@ -273,7 +273,7 @@ def build_learning_summary(
     planned_minutes,
     task,
 ):
-    """Summarise simulated learning evidence when the observed class stops."""
+    """Summarise generated rehearsal signals when the observed class stops."""
     pupils = [
         name
         for name in active_names
@@ -339,8 +339,8 @@ def build_learning_summary(
         )
     if average_motivation < 50:
         gap_themes.append(
-            "Final class drive was low, so sustained attention may have limited the "
-            "amount of learning evidenced."
+            "The generated final class drive was low. Rehearse how you would check "
+            "whether sustained attention is limiting access to the task."
         )
     if not gap_themes:
         gap_themes.append(
@@ -431,20 +431,20 @@ def build_learning_summary(
 
 
 def render_learning_summary(summary):
-    """Display the retained end-of-observation learning review."""
-    st.markdown("### 🧾 Learning summary")
+    """Display the retained end-of-observation rehearsal debrief."""
+    st.markdown("### 🧾 Rehearsal debrief")
     st.caption(
         f"Stopped after {summary['elapsed_minutes']:g} of "
         f"{summary['planned_minutes']:g} planned minutes "
-        f"({summary['lesson_fraction']}%). This is simulated observation evidence, "
-        "not a formal attainment judgement."
+        f"({summary['lesson_fraction']}%). These are generated scenario signals for "
+        "rehearsal—not evidence that learning occurred and not a pupil judgement."
     )
 
     metric_1, metric_2, metric_3, metric_4 = st.columns(4)
     with metric_1:
-        st.metric("Average task progress", f"{summary['average_progress']}%")
+        st.metric("Generated task progress", f"{summary['average_progress']}%")
     with metric_2:
-        st.metric("Final class drive", f"{summary['average_motivation']}%")
+        st.metric("Generated class drive", f"{summary['average_motivation']}%")
     with metric_3:
         st.metric("Work questions", summary["work_questions"])
     with metric_4:
@@ -452,7 +452,7 @@ def render_learning_summary(summary):
 
     bands = summary["bands"]
     st.markdown(
-        "**Learning evidence:** "
+        "**Generated scenario states:** "
         f"{bands['substantial']} substantial · "
         f"{bands['secure']} secure · "
         f"{bands['developing']} developing · "
@@ -461,17 +461,17 @@ def render_learning_summary(summary):
 
     gap_column, standout_column = st.columns(2)
     with gap_column:
-        st.markdown("#### Gaps to address")
+        st.markdown("#### Predicted pressure points to rehearse")
         for gap in summary["gap_themes"]:
             st.markdown(f"- {gap}")
     with standout_column:
-        st.markdown("#### Individual standouts")
+        st.markdown("#### Scenario standouts to notice")
         for pupil in summary["standouts"]:
             st.markdown(f"- **{pupil['name']}** — {pupil['reason']}")
 
-    st.markdown("#### Pupils to follow up")
+    st.markdown("#### Pupils the scenario suggests checking")
     if not summary["follow_up"]:
-        st.success("No pupil met the current follow-up thresholds.")
+        st.success("No pupil met the current scenario follow-up thresholds.")
     else:
         for pupil in summary["follow_up"]:
             detail = f" — last observed: {pupil['observation']}" if pupil["observation"] else ""
@@ -482,6 +482,7 @@ def render_learning_summary(summary):
 
 def render_observation_room(df, cohort):
     teacher_name = get_teacher_display_name()
+    cohort_age_context = "11 to 12" if cohort == "Year 7" else "14 to 15"
     teacher_addresses = get_teacher_address_options(teacher_name)
     address_instruction = get_teacher_address_instruction(teacher_name)
     teacher_key = re.sub(
@@ -522,6 +523,10 @@ def render_observation_room(df, cohort):
     col_header1, col_header2 = st.columns([3, 1])
     with col_header1:
         st.subheader("👁️ Circulate the Room: Full Class Observation")
+        st.caption(
+            "Generated profile-informed predictions for practising observation and "
+            "intervention—not evidence of actual pupil learning."
+        )
     with col_header2:
         enable_voice = st.toggle("🔊 Voice Audio", value=True, key="obs_voice_toggle")
 
@@ -585,7 +590,7 @@ def render_observation_room(df, cohort):
             if st.session_state.obs_image is not None:
                 with st.expander("🖼️ View Uploaded Task Resource"):
                     st.image(st.session_state.obs_image, width="stretch")
-            st.info(f"**You observed:** {observation}")
+            st.info(f"**Generated observation:** {observation}")
         
         chat_key = f"obs_chat_{target_name}_{teacher_key}"
         if chat_key not in st.session_state: st.session_state[chat_key] = []
@@ -593,7 +598,7 @@ def render_observation_room(df, cohort):
         col_a, col_b = st.columns([1, 3])
         with col_a:
             display_student_photo(target_name, cohort)
-            st.metric("Current Motivation", f"{current_mot}%")
+            st.metric("Generated drive", f"{current_mot}%")
             if st.button("🔙 Step Away (Back to Room)", width="stretch"):
                 st.session_state.obs_intervene_target = None
                 st.rerun()
@@ -622,7 +627,6 @@ def render_observation_room(df, cohort):
                     st.write(teacher_input)
 
                 target_row = df[df["Full Name"] == target_name].iloc[0]
-                age = "11" if cohort == "Year 7" else "15"
                 response_profile = get_ai_response_profile(target_row, cohort)
                 
                 transcript = "\n".join(
@@ -640,10 +644,13 @@ def render_observation_room(df, cohort):
 
                 system_prompt = (
                     "**[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**\n"
-                    f"You are roleplaying as a {age}-year-old UK student named {target_name}.\n"
+                    f"You are roleplaying as a UK student aged {cohort_age_context} named {target_name}.\n"
                     f"Compact pupil response profile: {response_profile}\n"
                     f"Task: '{st.session_state.obs_task}'\n"
                     f"{event_context}"
+                    "Generate the most plausible next response predicted from the pupil's "
+                    "age, attainment, confidence, participation, processing and current "
+                    "scenario state. This is rehearsal, not observed evidence.\n"
                     f"{address_instruction}\n"
                     f"Your current internal motivation level is {current_mot}/100.\n\n"
                     f"Transcript:\n{transcript}\n\n"
@@ -651,8 +658,9 @@ def render_observation_room(df, cohort):
                     "1. Evaluate the teacher's last statement. Is it specific praise, helpful scaffolding, dismissive, or overly harsh?\n"
                     "2. Based on their pedagogy, determine how this affects your motivation. Create a 'motivation_delta' integer between -25 (terrible) and +35 (great).\n"
                     f"3. Respond verbally as {target_name}. Include non-verbal actions in asterisks.\n"
-                    "4. Pick ONE emotion: [neutral, defensive, embarrassed, frustrated, bored, proud, eager].\n"
-                    "5. Return ONLY a raw JSON object with keys: \"dialogue\", \"emotion\", and \"motivation_delta\".\n"
+                    "4. Do not force useful reasoning. An age-natural 'I don't know', fragment, silence or refusal is valid when supported by the profile. Preserve a probable or possible misconception rather than making the pupil instantly correct.\n"
+                    "5. Pick ONE emotion: [neutral, defensive, embarrassed, frustrated, bored, proud, eager].\n"
+                    "6. Return ONLY a raw JSON object with keys: \"dialogue\", \"emotion\", and \"motivation_delta\".\n"
                 )
 
                 with st.spinner(f"{target_name} is reacting..."):
@@ -690,9 +698,15 @@ def render_observation_room(df, cohort):
                         target_stats["current_event_kind"] = None
                         
                         if delta > 0:
-                            st.success(f"📈 Motivation increased by {delta}% (Now {new_mot}%)")
+                            st.success(
+                                f"📈 Scenario drive increased by {delta}% "
+                                f"(Now {new_mot}%)"
+                            )
                         elif delta < 0:
-                            st.error(f"📉 Motivation dropped by {abs(delta)}% (Now {new_mot}%)")
+                            st.error(
+                                f"📉 Scenario drive dropped by {abs(delta)}% "
+                                f"(Now {new_mot}%)"
+                            )
                         else:
                             st.info(f"➖ Neutral interaction.")
                         
@@ -816,14 +830,16 @@ def render_observation_room(df, cohort):
                                 profiles.append(
                                     f"- {name} | Readiness: {stats['motivation']}% | "
                                     f"Participation: {stats['participation']:.0f}/100 | "
+                                    f"Confidence: {stats['confidence']:.0f}/100 | "
                                     f"Independence: {stats['independence']:.0f}/100 | "
                                     f"Processing speed: {stats['processing_speed']:.0f}/100"
                                 )
                             
                             start_prompt = (
                                 "**[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**\n"
+                                f"Class age: {cohort_age_context}.\n"
                                 f"Task: '{current_task}'\n"
-                                f"The teacher has just said 'Go!'. We are simulating the critical first {step_minutes} minutes.\n"
+                                f"The teacher has just said 'Go!'. Generate the most plausible profile-informed prediction for the first {step_minutes} minutes. This is rehearsal, not observed evidence.\n"
                                 f"Current Class Profiles:\n{chr(10).join(profiles)}\n\n"
                                 "CRITICAL RULES:\n"
                                 "1. Model a purposeful but varied classroom. Most pupils should begin the work.\n"
@@ -936,9 +952,10 @@ def render_observation_room(df, cohort):
                             
                             obs_prompt = (
                                 "**[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**\n"
+                                f"Class age: {cohort_age_context}.\n"
                                 f"Task: '{current_task}'\n"
                                 f"{global_prompt_injection}\n"
-                                f"Generate a 1-sentence physical observation of each student based on their numbers and STATUS.\n"
+                                f"Generate a 1-sentence predicted physical observation of each student based on their numbers and STATUS. These are plausible rehearsal predictions, not observed facts.\n"
                                 f"{chr(10).join(profiles)}\n\n"
                                 "RULES:\n"
                                 "1. If a student's STATUS says they have their hand up, describe them physically raising their hand. Do not announce the hidden reason.\n"
@@ -977,7 +994,7 @@ def render_observation_room(df, cohort):
                             st.session_state.obs_learning_summary = None
                             st.rerun()
                     else:
-                        st.success("Class stopped. The learning summary is available below.")
+                        st.success("Class stopped. The rehearsal debrief is available below.")
                         if (
                             st.session_state.obs_time_elapsed
                             < st.session_state.obs_task_duration
@@ -1047,8 +1064,8 @@ def render_observation_room(df, cohort):
             avg_prog = int(total_prog / len(st.session_state.obs_active_students))
             
             dash_col1, dash_col2, dash_col3 = st.columns(3)
-            with dash_col1: st.metric("Class Average Motivation", f"{avg_mot}%")
-            with dash_col2: st.metric("Class Average Progress", f"{avg_prog}%")
+            with dash_col1: st.metric("Generated Class Drive", f"{avg_mot}%")
+            with dash_col2: st.metric("Generated Task Progress", f"{avg_prog}%")
             with dash_col3: st.metric("Students Monitored", len(st.session_state.obs_active_students))
 
             if st.session_state.obs_lesson_stopped:
@@ -1081,6 +1098,8 @@ def render_observation_room(df, cohort):
                     
                     broadcast_prompt = (
                         "**[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**\n"
+                        "Generate profile-informed predicted reactions for rehearsal, "
+                        "not observed facts about these pupils.\n"
                         f"{address_instruction}\n"
                         f"{teacher_name} just addressed the entire class aloud: "
                         f"'{class_announcement}'\n\n"
@@ -1134,7 +1153,11 @@ def render_observation_room(df, cohort):
                             stats = st.session_state.student_states[student_name]
                             
                             mot_color = "🟢" if stats["motivation"] > 65 else "🟡" if stats["motivation"] > 35 else "🔴"
-                            st.caption(f"{mot_color} **Drive:** {stats['motivation']}% | 📋 **Done:** {stats['progress']}%")
+                            st.caption(
+                                f"{mot_color} **Generated drive:** "
+                                f"{stats['motivation']}% | 📋 **Scenario progress:** "
+                                f"{stats['progress']}%"
+                            )
                             
                             if stats.get("current_event"):
                                 st.warning(f"🙋 **Hand Raised**")
