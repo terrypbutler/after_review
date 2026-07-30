@@ -6,8 +6,6 @@ import json
 import time
 import random
 import re
-from io import BytesIO
-import wave
 from PIL import Image
 from config import REACTION_MODEL
 from modules.app_shell import (
@@ -16,6 +14,11 @@ from modules.app_shell import (
     get_teacher_display_name,
 )
 from modules.app_secrets import get_secret
+from modules.audio_utils import (
+    normalise_pcm16,
+    pcm16_to_wav,
+    pcm_segments_to_wav,
+)
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
@@ -31,29 +34,6 @@ _AFL_DISCUSSION_KEY = "afl_discussion"
 _AFL_STARTED_INTERACTIONS_KEY = "afl_started_interactions"
 _AFL_EXIT_ANSWERS_KEY = "afl_exit_answers"
 _AFL_PEER_FORMAT_VERSION = "long-conversations-v2"
-
-
-def pcm_segments_to_wav(
-    segments,
-    sample_rate=24000,
-    pause_ms=320,
-):
-    """Join signed 16-bit mono PCM clips into one sequential WAV conversation."""
-    clean_segments = [bytes(segment) for segment in segments if segment]
-    if not clean_segments:
-        return None
-
-    samples_per_pause = max(0, int(sample_rate * pause_ms / 1000))
-    silence = b"\x00\x00" * samples_per_pause
-    combined_pcm = silence.join(clean_segments)
-
-    output = BytesIO()
-    with wave.open(output, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(combined_pcm)
-    return output.getvalue()
 
 
 def _ensure_afl_state():
@@ -267,7 +247,8 @@ def get_elevenlabs_audio(
     text,
     voice_id="JBFqnCBsd6RMkjVDRZzb",
     cohort="Year 7",
-    output_format="mp3_44100_96",
+    output_format="pcm_24000",
+    return_raw_pcm=False,
 ):
     api_key = get_secret("ELEVENLABS_API_KEY")
     if not api_key:
@@ -283,7 +264,14 @@ def get_elevenlabs_audio(
             output_format=output_format,
             voice_settings=VoiceSettings(**_voice_settings_for_cohort(cohort)),
         )
-        return b"".join(audio_generator)
+        generated_audio = b"".join(audio_generator)
+        if output_format.startswith("pcm_"):
+            sample_rate = int(output_format.rsplit("_", 1)[-1])
+            levelled_pcm = normalise_pcm16(generated_audio)
+            if return_raw_pcm:
+                return levelled_pcm
+            return pcm16_to_wav(levelled_pcm, sample_rate)
+        return generated_audio
     except Exception as e:
         st.error(f"ElevenLabs Error: {e}")
         return None
@@ -1230,13 +1218,17 @@ def _render_peer_discussion_strategy(
                                     voice_id,
                                     cohort,
                                     output_format="pcm_24000",
+                                    return_raw_pcm=True,
                                 )
                                 if audio_bytes:
                                     pcm_segments.append(audio_bytes)
                             turns_with_audio.append(
                                 {**turn, "audio": None}
                             )
-                    conversation_audio = pcm_segments_to_wav(pcm_segments)
+                    conversation_audio = pcm_segments_to_wav(
+                        pcm_segments,
+                        normalise=False,
+                    )
                 else:
                     turns_with_audio = [
                         {**turn, "audio": None}
@@ -1505,7 +1497,7 @@ def render_academic_responses(df, cohort, subject="General"):
                     
             with col_b:
                 if "latest_audio" in st.session_state:
-                    st.audio(st.session_state["latest_audio"], format="audio/mp3", autoplay=True)
+                    st.audio(st.session_state["latest_audio"], format="audio/wav", autoplay=True)
                     del st.session_state["latest_audio"]
 
                 st.caption(
@@ -1745,7 +1737,7 @@ def render_academic_responses(df, cohort, subject="General"):
 
             with col_b:
                 if "latest_audio" in st.session_state:
-                    st.audio(st.session_state["latest_audio"], format="audio/mp3", autoplay=True)
+                    st.audio(st.session_state["latest_audio"], format="audio/wav", autoplay=True)
                     del st.session_state["latest_audio"]
 
                 if not _interaction_started(interaction_token):
@@ -1851,7 +1843,7 @@ def render_academic_responses(df, cohort, subject="General"):
                 
         with col2:
             if "latest_audio" in st.session_state:
-                st.audio(st.session_state["latest_audio"], format="audio/mp3", autoplay=True)
+                st.audio(st.session_state["latest_audio"], format="audio/wav", autoplay=True)
                 del st.session_state["latest_audio"]
                 
             if not _interaction_started(interaction_token):
