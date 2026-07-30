@@ -175,6 +175,7 @@ def _reset_academic_afl_state():
 
 def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_name):
     """Generate a student's response using the whole remembered class discussion."""
+    age_context = "11 to 12" if cohort == "Year 7" else "14 to 15"
     response_profile = get_ai_response_profile(target_row, cohort, subject)
     transcript = _afl_transcript()
     question_context = _opening_afl_question() or transcript
@@ -192,7 +193,10 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
     example_address = get_teacher_address_options(teacher_name)[-1]
 
     chat_prompt = f"""
-    You are roleplaying as {target_name}, a {cohort} student.
+    You are roleplaying as {target_name}, a {cohort} student aged {age_context}.
+    Produce the most plausible next response predicted from the supplied profile, age,
+    subject attainment and the conversation so far. This is a rehearsal prediction,
+    not observed evidence about the real pupil.
     The subject is {subject}. {address_instruction}
     Use this compact pupil response profile:
     {response_profile}
@@ -214,6 +218,8 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
     4. Match the student's likely attainment and needs. Do not automatically become
        correct just because the teacher probes. Reveal the pupil's thinking; self-correct
        only when the latest prompt or a classmate has supplied a genuinely useful scaffold.
+       If the assigned state is NO_ATTEMPT, an age-natural "I don't know", silence,
+       shrug or short refusal is a complete valid response; do not add hidden reasoning.
     5. Determine the student's current emotion. Pick ONE:
        [neutral, angry, defensive, sad, bored, hesitant, excited, eager].
     6. Return a raw JSON object with exactly two keys: "dialogue" and "emotion".
@@ -307,7 +313,12 @@ _RESPONSE_OUTCOME_GUIDANCE = {
     ),
     "uncertain": (
         "Make a tentative, incomplete attempt. The pupil may hesitate or say they are "
-        "not sure, but must still reveal enough thinking for the teacher to respond."
+        "not sure and may offer only a fragment of their current thinking."
+    ),
+    "no_attempt": (
+        "Give an authentic non-attempt such as 'I don't know', 'not sure', a shrug, "
+        "silence or a very short refusal. Do not hide a correct explanation inside it "
+        "and do not make the pupil suddenly articulate."
     ),
 }
 
@@ -466,41 +477,108 @@ def _student_attainment_score(row, subject):
     return 0.78 * attainment + 0.22 * learning_readiness
 
 
-def _response_outcome(row, question, subject):
-    """Choose a stable but varied response outcome for one pupil and question."""
+def _student_response_readiness(row):
+    """Estimate whether this pupil is likely to offer an answer when invited."""
+    metrics = [
+        value
+        for value in (
+            _bounded_metric(row, ["Participation Level"]),
+            _bounded_metric(row, ["Academic Confidence"]),
+            _bounded_metric(row, ["Independence"]),
+            _bounded_metric(row, ["Processing Speed", "Processing Time"]),
+        )
+        if value is not None
+    ]
+    readiness = sum(metrics) / len(metrics) if metrics else 50.0
+
+    cold_call = get_flexible_text(
+        row,
+        ["Cold Call Response", "Cold-call response"],
+        default="",
+    ).casefold()
+    if any(
+        signal in cold_call
+        for signal in (
+            "reluctant",
+            "hesitant",
+            "quiet",
+            "avoid",
+            "withdraw",
+            "i don't know",
+            "idk",
+            "refus",
+        )
+    ):
+        readiness -= 12
+    if any(
+        signal in cold_call
+        for signal in ("eager", "volunteer", "confident", "readily", "enthusiastic")
+    ):
+        readiness += 8
+    return max(0.0, min(100.0, readiness))
+
+
+def _response_outcome_weights(row, subject):
+    """Return a profile-informed distribution of plausible response states."""
     score = _student_attainment_score(row, subject)
+    readiness = _student_response_readiness(row)
     if score >= 75:
-        weights = (
-            ("secure", 0.48),
-            ("partial", 0.24),
-            ("misconception", 0.12),
-            ("slip", 0.11),
-            ("uncertain", 0.05),
-        )
+        weights = {
+            "secure": 0.46,
+            "partial": 0.24,
+            "misconception": 0.12,
+            "slip": 0.11,
+            "uncertain": 0.05,
+            "no_attempt": 0.02,
+        }
     elif score >= 55:
-        weights = (
-            ("secure", 0.31),
-            ("partial", 0.28),
-            ("misconception", 0.22),
-            ("slip", 0.12),
-            ("uncertain", 0.07),
-        )
+        weights = {
+            "secure": 0.29,
+            "partial": 0.28,
+            "misconception": 0.22,
+            "slip": 0.12,
+            "uncertain": 0.06,
+            "no_attempt": 0.03,
+        }
     elif score >= 35:
-        weights = (
-            ("secure", 0.18),
-            ("partial", 0.27),
-            ("misconception", 0.32),
-            ("slip", 0.12),
-            ("uncertain", 0.11),
-        )
+        weights = {
+            "secure": 0.16,
+            "partial": 0.27,
+            "misconception": 0.32,
+            "slip": 0.12,
+            "uncertain": 0.09,
+            "no_attempt": 0.04,
+        }
     else:
-        weights = (
-            ("secure", 0.10),
-            ("partial", 0.23),
-            ("misconception", 0.38),
-            ("slip", 0.13),
-            ("uncertain", 0.16),
-        )
+        weights = {
+            "secure": 0.08,
+            "partial": 0.22,
+            "misconception": 0.38,
+            "slip": 0.12,
+            "uncertain": 0.12,
+            "no_attempt": 0.08,
+        }
+
+    if readiness < 25:
+        weights["secure"] -= 0.05
+        weights["partial"] -= 0.04
+        weights["uncertain"] += 0.04
+        weights["no_attempt"] += 0.05
+    elif readiness < 40:
+        weights["secure"] -= 0.03
+        weights["partial"] -= 0.02
+        weights["uncertain"] += 0.02
+        weights["no_attempt"] += 0.03
+    elif readiness >= 80 and weights["no_attempt"] >= 0.02:
+        weights["secure"] += 0.01
+        weights["no_attempt"] -= 0.01
+
+    return weights
+
+
+def _response_outcome(row, question, subject):
+    """Choose a stable probability-weighted prediction for one pupil and question."""
+    weights = _response_outcome_weights(row, subject)
 
     name = get_flexible_text(row, ["Full Name"], default="Student")
     seed_text = f"{name}|{subject}|{str(question).strip()}".casefold()
@@ -508,22 +586,31 @@ def _response_outcome(row, question, subject):
     roll = int.from_bytes(digest[:8], "big") / float(2**64)
 
     cumulative = 0.0
-    for outcome, weight in weights:
+    for outcome, weight in weights.items():
         cumulative += weight
         if roll < cumulative:
             return outcome
-    return weights[-1][0]
+    return next(reversed(weights))
 
 
 def build_response_calibration(question, student_subset, subject):
-    """Assign an unlabelled, realistic mix of answer qualities to a pupil group."""
+    """Assign profile-informed response predictions to a pupil group."""
     plans = []
     for _, row in student_subset.iterrows():
+        outcome = _response_outcome(row, question, subject)
+        weights = _response_outcome_weights(row, subject)
         plans.append(
             {
                 "name": str(row.get("Full Name", "Student")),
                 "score": _student_attainment_score(row, subject),
-                "outcome": _response_outcome(row, question, subject),
+                "response_readiness": _student_response_readiness(row),
+                "outcome": outcome,
+                "_weights": weights,
+                "likelihood": (
+                    "probable"
+                    if weights.get(outcome, 0) >= 0.20
+                    else "possible"
+                ),
             }
         )
 
@@ -538,9 +625,14 @@ def build_response_calibration(question, student_subset, subject):
             (
                 plan
                 for plan in plans
-                if plan["outcome"] not in {"misconception", "slip"}
+                if plan["outcome"]
+                not in {"misconception", "slip", "no_attempt"}
             ),
-            key=lambda plan: (plan["score"], plan["name"].casefold()),
+            key=lambda plan: (
+                plan["score"],
+                plan["response_readiness"],
+                plan["name"].casefold(),
+            ),
         )
         while len(substantive_errors) < required_substantive_errors and candidates:
             plan = candidates.pop(0)
@@ -550,7 +642,27 @@ def build_response_calibration(question, student_subset, subject):
                 else "slip"
             )
             substantive_errors.append(plan)
-    elif len(plans) >= 2 and all(
+
+    if len(plans) >= 8 and not any(
+        plan["outcome"] == "no_attempt" for plan in plans
+    ):
+        no_attempt_candidates = sorted(
+            (
+                plan
+                for plan in plans
+                if plan["response_readiness"] <= 45
+                and plan["outcome"] not in {"misconception", "slip"}
+            ),
+            key=lambda plan: (
+                plan["response_readiness"],
+                plan["score"],
+                plan["name"].casefold(),
+            ),
+        )
+        if no_attempt_candidates:
+            no_attempt_candidates[0]["outcome"] = "no_attempt"
+
+    if len(plans) >= 2 and all(
         plan["outcome"] == "secure" for plan in plans
     ):
         lowest_security = min(
@@ -559,6 +671,22 @@ def build_response_calibration(question, student_subset, subject):
         )
         lowest_security["outcome"] = "partial"
 
+    for plan in plans:
+        outcome_weight = plan.pop("_weights", {}).get(plan["outcome"], 0)
+        plan["likelihood"] = (
+            "probable" if outcome_weight >= 0.20 else "possible"
+        )
+        if plan["outcome"] == "misconception":
+            plan["likelihood"] = (
+                "probable" if plan["score"] < 55 else "possible"
+            )
+        elif plan["outcome"] == "no_attempt":
+            plan["likelihood"] = (
+                "probable"
+                if plan["response_readiness"] < 35
+                else "possible"
+            )
+
     return plans
 
 
@@ -566,7 +694,10 @@ def _format_response_calibration(plans, subject):
     lines = []
     for plan in plans:
         guidance = _RESPONSE_OUTCOME_GUIDANCE[plan["outcome"]]
-        lines.append(f"- {plan['name']}: {plan['outcome'].upper()} — {guidance}")
+        lines.append(
+            f"- {plan['name']}: {plan['outcome'].upper()} "
+            f"({plan['likelihood'].upper()} prediction) — {guidance}"
+        )
 
     subject_guidance = _SUBJECT_MISCONCEPTION_GUIDANCE.get(
         str(subject).strip().casefold(),
@@ -827,6 +958,13 @@ def fetch_ai_answers(
     A trainee teacher identified as '{teacher_name}' is conducting a
     {subject} lesson for a class of {cohort} students (approximate age: {age_context}).
     The teacher has asked the class: "{question}"
+
+    EPISTEMIC STATUS:
+    Generate profile-informed predictions of plausible pupil responses for teacher
+    rehearsal. They are not measurements of learning and not claims about what any
+    pupil will definitely say. PROBABLE means strongly supported by the supplied
+    attainment and response profile; POSSIBLE means a credible alternative that should
+    still be useful to rehearse.
     
     Here are the compact, privacy-minimised response profiles for the students answering:
     {profiles_text}
@@ -842,11 +980,15 @@ def fetch_ai_answers(
     {discussion_history or "No students have contributed yet."}
     
     CRITICAL PEDAGOGICAL CONSTRAINTS:
-    1. Ability Match: Scale vocabulary, accuracy, length, and depth to the compact profile.
+    1. Ability and Age Match: Scale vocabulary, grammar, accuracy, length and depth to
+       the compact profile and {age_context}. Avoid polished adult or teacher language.
     2. Follow each pupil's assigned response calibration exactly. Privately solve or
        analyse the question first, then construct the assigned outcome. Do not label,
        diagnose or explain the error in the pupil's answer.
-    3. Participation Match: Use the pupil's confidence, participation, processing and discussion style; do not invent private background information.
+    3. Participation Match: Use the pupil's confidence, participation, processing and
+       discussion style. A likely non-attempt may be "I don't know", "not sure", a
+       fragment or no written attempt. Never append correct reasoning to make an IDK
+       response more informative. Do not invent private background information.
     {address_rule}
     5. Math Formatting: Make maths look like real maths. DO NOT use raw carets (like r^2). You MUST use Unicode superscripts (e.g., r², x³, y₁) and symbols (π, √, ÷, ×, ±). For complex equations, use LaTeX wrapped in single `$` (e.g., `$x = \\frac{{1}}{{2}}$`).
     6. Layout: If the answer involves multiple steps of calculation, you MUST put each step on a new line using a newline character (\\n).
@@ -857,6 +999,8 @@ def fetch_ai_answers(
       spelling or grammar alone as the misconception, and do not make errors silly.
     - Do not silently repair a MISCONCEPTION, SLIP, PARTIAL or UNCERTAIN response into a
       fully correct answer. Variation across the class is intentional.
+    - For NO_ATTEMPT, return an age-authentic minimal response such as "I don't know"
+      or "Not sure" (or "No attempt" for written work), without an explanation.
     - If you use LaTeX, you MUST double-escape the backslashes (e.g., `\\\\frac`, `\\\\sqrt`) so the JSON parser does not crash.
     """
     
@@ -894,6 +1038,7 @@ def generate_peer_discussion(
 ):
     """Simulate a seating-based pupil conversation and its class feedback."""
     participant_names = participant_df["Full Name"].astype(str).tolist()
+    age_context = "11 to 12" if cohort == "Year 7" else "14 to 15"
     profiles = [
         (
             f"- {row.get('Full Name')}: "
@@ -928,8 +1073,12 @@ def generate_peer_discussion(
 
     prompt = f"""
     **[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**
-    A {cohort} {subject} class has been asked: "{question}"
+    A {cohort} {subject} class aged {age_context} has been asked: "{question}"
     {address_instruction}
+
+    This is a profile-informed prediction for rehearsal, not evidence of what these
+    pupils truly know or will definitely say. Preserve both probable and possible
+    response states supplied below.
 
     Simulate {format_description}. The pupils are:
     {chr(10).join(profiles)}
@@ -960,6 +1109,8 @@ def generate_peer_discussion(
        follow their assigned starting state. Do not label mistakes in the conversation.
        Another pupil may notice, question or correct an error, but they should not all
        jump immediately to a polished correct conclusion.
+       A pupil assigned NO_ATTEMPT may say "I don't know", offer silence/a shrug or
+       resist contributing. Do not force every pupil to expose useful reasoning.
     4. Do not introduce the teacher as a speaker and do not invent private background.
     5. Keep each turn to one or two natural spoken sentences.
     6. Create a concise "feedback" statement in the pupils' collective voice that
@@ -1449,9 +1600,10 @@ def render_academic_responses(df, cohort, subject="General"):
         "🎯 Cold Call (Interactive Probing)",
     ], horizontal=True, label_visibility="collapsed", key="afl_strategy")
     st.caption(
-        "Response realism is active: pupils may give secure, partial or uncertain "
-        "answers and may reveal common subject misconceptions. Errors are deliberately "
-        "left unlabelled for you to diagnose and probe."
+        "Profile-informed prediction is active: responses are plausible rehearsal "
+        "estimates, not evidence of what a pupil truly knows or will definitely say. "
+        "Expect secure answers, partial thinking, probable or possible misconceptions, "
+        "slips, hesitation and occasional 'I don't know' responses."
     )
     
     st.markdown("---")
