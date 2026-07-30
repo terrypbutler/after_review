@@ -2,7 +2,11 @@ import streamlit as st
 import json
 import re
 from config import REACTION_MODEL
-from modules.app_shell import get_teacher_display_name
+from modules.app_shell import (
+    get_teacher_address_instruction,
+    get_teacher_address_options,
+    get_teacher_display_name,
+)
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
@@ -26,6 +30,7 @@ def get_flexible_text(row, possible_names):
 
 def render_simulator(df, cohort):
     teacher_name = get_teacher_display_name()
+    teacher_addresses = get_teacher_address_options(teacher_name)
     col_header1, col_header2 = st.columns([3, 1])
     with col_header1:
         st.subheader("🤖 Virtual Student Simulator")
@@ -53,13 +58,21 @@ def render_simulator(df, cohort):
     predicted = get_flexible_text(row, ["Projected Grade", "Predicted Grade"])
     eal = get_flexible_text(row, ["EAL", "EAL Status"])
     response_profile = get_ai_response_profile(row, cohort)
-    teacher_key = re.sub(r"[^a-z0-9]+", "_", teacher_name.casefold()).strip("_")
+    teacher_key = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        "|".join(teacher_addresses).casefold(),
+    ).strip("_")
     chat_key = f"chat_{selected_student}_{teacher_key or 'teacher'}"
 
     st.markdown("---")
+    address_labels = " or ".join(
+        f"**{address}**"
+        for address in teacher_addresses
+    )
     st.caption(
-        f"Teacher name/title: **{teacher_name}** · Change this using the shared "
-        "sidebar field."
+        f"Teacher speaker label: **{teacher_name}** · Pupils may address you as "
+        f"{address_labels}. Change this in the sidebar."
     )
 
     col1, col2 = st.columns([1, 2])
@@ -109,13 +122,14 @@ def render_simulator(df, cohort):
                 f"{teacher_name if m['role']=='user' else selected_student}: {m['content']}"
                 for m in recent_messages
             )
+            address_instruction = get_teacher_address_instruction(teacher_name)
+            example_address = teacher_addresses[-1]
 
             system_prompt = (
                 f"You are roleplaying as a {age}-year-old UK student named {selected_student}.\n"
                 f"Compact pupil response profile: {response_profile}\n"
                 f"Scenario: {scenario}.\n\n"
-                f"The teacher's exact name/title is \"{teacher_name}\". Use that exact "
-                "form if addressing them; never substitute Sir, Miss or another name.\n\n"
+                f"{address_instruction}\n\n"
                 f"Transcript:\n{transcript}\n\n"
                 "CRITICAL RULES:\n"
                 f"1. Respond as {selected_student}. Keep it short (1-3 sentences).\n"
@@ -124,7 +138,7 @@ def render_simulator(df, cohort):
                 "4. You MUST return your response as a raw JSON object with two keys: \"dialogue\" and \"emotion\".\n\n"
                 "Example Format:\n"
                 f"{{\"dialogue\": \"*crosses arms* I don't know why you're picking on "
-                f"me, {teacher_name}.\", \"emotion\": \"defensive\"}}"
+                f"me, {example_address}.\", \"emotion\": \"defensive\"}}"
             )
 
             # --- 1. FAST TEXT GENERATION ---
