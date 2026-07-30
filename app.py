@@ -297,7 +297,10 @@ elif page == "Seating Plan":
 
 elif page == "Simulator":
     st.title("Virtual student roleplay")
-    st.caption("Rehearse a short interaction, review the response and try one adjustment.")
+    st.caption(
+        "Rehearse against a profile-informed predicted response, review your move "
+        "and try one adjustment."
+    )
 
     # 1. Select the base data
     cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
@@ -318,7 +321,10 @@ elif page == "Simulator":
 
 elif page == "Academic AfL":
     st.title("Academic AfL")
-    st.caption("Rehearse whole-class checks for understanding and responsive questioning.")
+    st.caption(
+        "Rehearse whole-class checks using plausible predicted responses, including "
+        "partial answers, misconceptions and non-attempts."
+    )
     cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
     df_base = get_cohort_data(cohort)
     selected_subject, filtered_df = render_subject_class_setup(
@@ -332,7 +338,10 @@ elif page == "Academic AfL":
 
 elif page == "Lesson Stress-Tester":
     st.title("Lesson stress-tester")
-    st.caption("Test one lesson against this class before you teach it.")
+    st.caption(
+        "Predict likely lesson pressure points and pupil response forms, then decide "
+        "what real-pupil evidence to collect."
+    )
     cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
     df_base = get_cohort_data(cohort)
     selected_subject, filtered_df = render_subject_class_setup(
@@ -346,8 +355,8 @@ elif page == "Lesson Stress-Tester":
 elif page == "Sequence Evaluator":
     st.title("Sequence of learning evaluator")
     st.caption(
-        "Evaluate curriculum progression, lesson-to-lesson coherence and how well "
-        "a class can access the whole sequence."
+        "Analyse curriculum progression and predict plausible access risks across "
+        "the sequence; validate them with real pupils."
     )
     cohort = st.radio(
         "Select Class:",
@@ -365,7 +374,10 @@ elif page == "Sequence Evaluator":
 
 elif page == "Observe Learning":
     st.title("Observe learning")
-    st.caption("Circulate through a simulated class and practise noticing before intervening.")
+    st.caption(
+        "Circulate through generated prediction scenarios and practise noticing "
+        "before intervening."
+    )
     cohort = st.radio("Select Class:", ["Year 7", "Year 10"], horizontal=True)
     df_base = get_cohort_data(cohort)
     _, filtered_df = render_subject_class_setup(
