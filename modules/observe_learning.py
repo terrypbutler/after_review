@@ -600,7 +600,7 @@ def render_observation_room(df, cohort):
 
         with col_b:
             if "latest_audio_obs" in st.session_state:
-                st.audio(st.session_state["latest_audio_obs"], format="audio/mp3", autoplay=True)
+                st.audio(st.session_state["latest_audio_obs"], format="audio/wav", autoplay=True)
                 del st.session_state["latest_audio_obs"]
 
             for msg in st.session_state[chat_key]:
