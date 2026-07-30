@@ -146,8 +146,10 @@ def build_sequence_prompt(
 
     return f"""
     **[FICTIONAL TEACHER-TRAINING SCENARIO — PUPIL DATA IS MOCK/SYNTHETIC]**
-    You are an expert UK curriculum mentor evaluating a sequence of learning rather
-    than a single lesson.
+    You are an expert UK curriculum mentor analysing a sequence of learning from
+    outside the learner rather than pretending to be a pupil. Your output identifies
+    plausible risks and response predictions for rehearsal; it does not prove what any
+    pupil knows or whether the sequence will work.
 
     Subject: {subject}
     Cohort: {cohort} ({age_context})
@@ -160,6 +162,16 @@ def build_sequence_prompt(
     COMPACT, PRIVACY-MINIMISED PUPIL RESPONSE PROFILES:
     {profiles_text}
 
+    EPISTEMIC RULES:
+    - Every named-pupil response is a profile-informed prediction, not observed evidence
+      and not a guarantee about what the pupil will say.
+    - "Probable" means strongly supported by the sequence demands and pupil profile.
+      "Possible" means a credible alternative worth checking or rehearsing.
+    - Predictions must be age-authentic and may be secure, partial, misconception, slip,
+      uncertain or no attempt. Include "I don't know", fragments or silence where the
+      profile and task demands make that plausible.
+    - Do not make pupils uniformly articulate, compliant or successful.
+
     EVALUATION REQUIREMENTS:
     1. Curriculum intent and endpoint: identify what pupils should know or be able to
        do by the end, and judge alignment with the {key_stage} {subject} curriculum.
@@ -171,11 +183,13 @@ def build_sequence_prompt(
        the next lesson depends on it, and whether the final assessment matches the intent.
     5. Cognitive load: identify abrupt jumps, overloaded lessons, duplication, missing
        bridges and places where scaffolds should fade.
-    6. Class access: use the supplied pupil profiles to identify precise points where
-       particular pupils may struggle or excel. Preserve high expectations and recommend
-       scaffolding, not separate low-ceiling tasks.
+    6. Class access: use the supplied profiles to predict plausible response forms at
+       precise points. Identify probable and possible misconceptions, including when a
+       pupil may offer a partial response or "I don't know". Preserve high expectations
+       and recommend scaffolding, not separate low-ceiling tasks.
     7. Be evidence-led. If a lesson, assessment or curriculum element is absent from the
        supplied material, say it is not visible rather than inventing it.
+    8. For each prediction, state what real-pupil evidence would confirm or disconfirm it.
 
     ANTI-PATTERN GUARDRAILS:
     - Do not use VAK learning styles, left/right-brain claims or the Learning Pyramid.
@@ -220,12 +234,18 @@ def build_sequence_prompt(
           "repair": "<precise change>"
         }}
       ],
-      "student_pathways": [
+      "response_predictions": [
         {{
           "name": "<exact pupil name from the supplied profiles>",
-          "trajectory": "<likely experience across the sequence>",
+          "profile_basis": "<non-sensitive qualities relevant to this prediction>",
+          "most_likely_response": "<age-authentic predicted response form>",
+          "probable_misconception": "<specific misconception or 'None strongly indicated'>",
+          "possible_misconception": "<credible alternative misconception>",
+          "likelihood": "<Probable or Possible>",
+          "confidence": "<Low, Medium or High>",
           "risk_point": "<specific lesson/transition>",
-          "adjustment": "<high-expectation scaffold or extension>"
+          "adjustment": "<high-expectation scaffold, probe or extension>",
+          "verify_live": "<question, work sample or observation needed from real pupils>"
         }}
       ],
       "priority_actions": [
@@ -235,12 +255,20 @@ def build_sequence_prompt(
           "action": "<specific actionable revision>",
           "reason": "<learning benefit>"
         }}
+      ],
+      "validation_plan": [
+        {{
+          "location": "<lesson/task>",
+          "check": "<hinge question, exit ticket or observable evidence>",
+          "prediction_tested": "<which risk or misconception this checks>"
+        }}
       ]
     }}
 
     Include every detected lesson in sequence_map. Select 4-6 distinct pupils for
-    student_pathways, representing different likely experiences rather than merely
-    selecting pupils with SEND.
+    response_predictions, representing contrasting attainment, confidence,
+    participation, processing and access patterns rather than merely selecting pupils
+    with SEND.
     """
 
 
@@ -273,18 +301,23 @@ def normalise_sequence_result(result, allowed_names):
     for list_key in (
         "sequence_map",
         "gaps_and_bottlenecks",
-        "student_pathways",
+        "response_predictions",
         "priority_actions",
+        "validation_plan",
     ):
         if not isinstance(clean_result.get(list_key), list):
             clean_result[list_key] = []
+        clean_result[list_key] = [
+            item
+            for item in clean_result[list_key]
+            if isinstance(item, dict)
+        ]
 
     allowed = {str(name).strip() for name in allowed_names}
-    clean_result["student_pathways"] = [
-        pathway
-        for pathway in clean_result["student_pathways"]
-        if isinstance(pathway, dict)
-        and str(pathway.get("name", "")).strip() in allowed
+    clean_result["response_predictions"] = [
+        prediction
+        for prediction in clean_result["response_predictions"]
+        if str(prediction.get("name", "")).strip() in allowed
     ][:6]
     return clean_result
 
@@ -298,6 +331,10 @@ def render_sequence_result(result):
     metrics = result.get("metrics", {})
     st.success(
         f"Sequence evaluated: {metrics.get('lessons_detected', 0)} lessons detected."
+    )
+    st.caption(
+        "Scores are heuristic planning indicators. Named responses are "
+        "profile-informed predictions for rehearsal, not observed pupil evidence."
     )
 
     metric_columns = st.columns(6)
@@ -364,7 +401,7 @@ def render_sequence_result(result):
     else:
         st.warning("No lesson map was returned.")
 
-    gap_column, pathway_column = st.columns(2)
+    gap_column, prediction_column = st.columns(2)
     with gap_column:
         st.markdown("### Gaps and bottlenecks")
         gaps = result.get("gaps_and_bottlenecks", [])
@@ -379,22 +416,42 @@ def render_sequence_result(result):
                 st.write(gap.get("impact", ""))
                 st.success(gap.get("repair", ""))
 
-    with pathway_column:
-        st.markdown("### Pupil pathways")
-        pathways = result.get("student_pathways", [])
-        if not pathways:
-            st.caption("No valid pupil pathway was returned.")
-        for pathway in pathways:
+    with prediction_column:
+        st.markdown("### Profile-informed response predictions")
+        predictions = result.get("response_predictions", [])
+        if not predictions:
+            st.caption("No valid pupil prediction was returned.")
+        for prediction in predictions:
             with st.expander(
-                str(pathway.get("name", "Pupil")),
+                f"{prediction.get('name', 'Pupil')} — "
+                f"{prediction.get('likelihood', 'Possible')} "
+                f"({prediction.get('confidence', 'Medium')} confidence)",
                 expanded=False,
             ):
-                st.write(pathway.get("trajectory", ""))
+                st.caption(
+                    f"Profile basis: {prediction.get('profile_basis', 'Not stated')}"
+                )
+                st.write(
+                    "**Most likely response:** "
+                    f"{prediction.get('most_likely_response', 'Not predicted')}"
+                )
                 st.warning(
-                    f"Risk point: {pathway.get('risk_point', 'Not identified')}"
+                    "**Probable misconception:** "
+                    f"{prediction.get('probable_misconception', 'None strongly indicated')}"
+                )
+                st.info(
+                    "**Possible misconception:** "
+                    f"{prediction.get('possible_misconception', 'Not identified')}"
+                )
+                st.caption(
+                    f"Risk point: {prediction.get('risk_point', 'Not identified')}"
                 )
                 st.success(
-                    f"Adjustment: {pathway.get('adjustment', 'Not identified')}"
+                    f"Adjustment: {prediction.get('adjustment', 'Not identified')}"
+                )
+                st.caption(
+                    "Verify with real pupils: "
+                    f"{prediction.get('verify_live', 'Collect live evidence')}"
                 )
 
     st.markdown("### Priority revisions")
@@ -409,12 +466,24 @@ def render_sequence_result(result):
             f"*Why: {action.get('reason', '')}*"
         )
 
+    st.markdown("### What to verify with real pupils")
+    validation_plan = result.get("validation_plan", [])
+    if not validation_plan:
+        st.caption("No validation check was returned.")
+    for item in validation_plan:
+        st.markdown(
+            f"**{item.get('location', 'Lesson')}** — "
+            f"{item.get('check', 'Collect pupil evidence')}  \n"
+            f"*Tests: {item.get('prediction_tested', 'identified risk')}*"
+        )
+
 
 def render_sequence_evaluator(df, cohort, subject="General"):
     st.subheader(f"🧭 Sequence Evaluator: {cohort} {subject}")
     st.caption(
         "Upload a scheme of work or several lesson plans in teaching order. "
-        "The evaluation considers the complete learning journey, not isolated activities."
+        "The evaluator predicts plausible pressure points and pupil responses for "
+        "rehearsal; real-pupil evidence is still required."
     )
 
     api_key = get_secret("GEMINI_API_KEY")
@@ -427,7 +496,8 @@ def render_sequence_evaluator(df, cohort, subject="General"):
     st.sidebar.markdown("### 🧭 Sequence evaluation")
     st.sidebar.caption(
         "Reviews curriculum intent, prerequisites, progression, retrieval, "
-        "assessment, cognitive load and adaptive teaching across lessons."
+        "assessment and cognitive load, then proposes profile-informed response "
+        "predictions and checks to validate with real pupils."
     )
 
     uploaded_files = st.file_uploader(
@@ -516,7 +586,8 @@ def render_sequence_evaluator(df, cohort, subject="General"):
                 expected_lessons,
             )
             with st.spinner(
-                "Tracing curriculum progression and pupil pathways across the sequence..."
+                "Tracing curriculum progression and profile-informed response "
+                "predictions across the sequence..."
             ):
                 try:
                     model = genai.GenerativeModel(ANALYSIS_MODEL)
