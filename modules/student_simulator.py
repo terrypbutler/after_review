@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import re
 from config import REACTION_MODEL
+from modules.app_shell import get_teacher_display_name
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
@@ -24,6 +25,7 @@ def get_flexible_text(row, possible_names):
     return "None recorded"
 
 def render_simulator(df, cohort):
+    teacher_name = get_teacher_display_name()
     col_header1, col_header2 = st.columns([3, 1])
     with col_header1:
         st.subheader("🤖 Virtual Student Simulator")
@@ -51,8 +53,14 @@ def render_simulator(df, cohort):
     predicted = get_flexible_text(row, ["Projected Grade", "Predicted Grade"])
     eal = get_flexible_text(row, ["EAL", "EAL Status"])
     response_profile = get_ai_response_profile(row, cohort)
+    teacher_key = re.sub(r"[^a-z0-9]+", "_", teacher_name.casefold()).strip("_")
+    chat_key = f"chat_{selected_student}_{teacher_key or 'teacher'}"
 
     st.markdown("---")
+    st.caption(
+        f"Teacher name/title: **{teacher_name}** · Change this using the shared "
+        "sidebar field."
+    )
 
     col1, col2 = st.columns([1, 2])
 
@@ -67,7 +75,7 @@ def render_simulator(df, cohort):
 
         scenario = st.radio("Scenario:", ["End of Lesson", "Corridor Behavior", "Struggling with Task"])
         if st.button("🔄 Reset Chat", width="stretch"):
-            st.session_state[f"chat_{selected_student}"] = []
+            st.session_state[chat_key] = []
             st.rerun()
 
     with col2:
@@ -75,12 +83,17 @@ def render_simulator(df, cohort):
             st.audio(st.session_state["latest_audio_sim"], format="audio/mp3", autoplay=True)
             del st.session_state["latest_audio_sim"]
 
-        chat_key = f"chat_{selected_student}"
         if chat_key not in st.session_state:
             st.session_state[chat_key] = []
 
         for msg in st.session_state[chat_key]:
             with st.chat_message(msg["role"]):
+                speaker = (
+                    teacher_name
+                    if msg["role"] == "user"
+                    else selected_student
+                )
+                st.markdown(f"**{speaker}**")
                 st.write(msg["content"])
 
         teacher_input = st.chat_input(f"Say something to {selected_student}...")
@@ -88,11 +101,12 @@ def render_simulator(df, cohort):
         if teacher_input:
             st.session_state[chat_key].append({"role": "user", "content": teacher_input})
             with st.chat_message("user"):
+                st.markdown(f"**{teacher_name}**")
                 st.write(teacher_input)
 
             recent_messages = st.session_state[chat_key][-8:]
             transcript = "\n".join(
-                f"{'Teacher' if m['role']=='user' else selected_student}: {m['content']}"
+                f"{teacher_name if m['role']=='user' else selected_student}: {m['content']}"
                 for m in recent_messages
             )
 
@@ -100,6 +114,8 @@ def render_simulator(df, cohort):
                 f"You are roleplaying as a {age}-year-old UK student named {selected_student}.\n"
                 f"Compact pupil response profile: {response_profile}\n"
                 f"Scenario: {scenario}.\n\n"
+                f"The teacher's exact name/title is \"{teacher_name}\". Use that exact "
+                "form if addressing them; never substitute Sir, Miss or another name.\n\n"
                 f"Transcript:\n{transcript}\n\n"
                 "CRITICAL RULES:\n"
                 f"1. Respond as {selected_student}. Keep it short (1-3 sentences).\n"
@@ -107,7 +123,8 @@ def render_simulator(df, cohort):
                 "3. Determine the student's current emotion based on the scenario and teacher's prompt. Pick ONE: [neutral, angry, defensive, sad, bored, hesitant, excited, eager].\n"
                 "4. You MUST return your response as a raw JSON object with two keys: \"dialogue\" and \"emotion\".\n\n"
                 "Example Format:\n"
-                "{\"dialogue\": \"*crosses arms* I don't know why you're picking on me, sir.\", \"emotion\": \"defensive\"}"
+                f"{{\"dialogue\": \"*crosses arms* I don't know why you're picking on "
+                f"me, {teacher_name}.\", \"emotion\": \"defensive\"}}"
             )
 
             # --- 1. FAST TEXT GENERATION ---
@@ -133,6 +150,7 @@ def render_simulator(df, cohort):
             # SPEED HACK: Instantly show the text on screen BEFORE generating audio
             st.session_state[chat_key].append({"role": "assistant", "content": display_text})
             with st.chat_message("assistant"):
+                st.markdown(f"**{selected_student}**")
                 st.write(display_text)
                 
             st.toast(f"Student Mood: {current_emotion.upper()} 🎭")
