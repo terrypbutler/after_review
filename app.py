@@ -8,6 +8,7 @@ from modules.app_shell import (
     render_home,
     render_navigation,
     render_sidebar_footer,
+    render_teacher_identity,
 )
 from modules.class_setup import render_class_filter, render_subject_class_setup
 from modules.data_loader import DataLoadError, load_data
@@ -48,6 +49,7 @@ def get_cohort_data(cohort):
 
 
 page = render_navigation()
+render_teacher_identity()
 render_sidebar_footer(load_data.clear)
 
 if page == "Home":
