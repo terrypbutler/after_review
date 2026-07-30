@@ -1,6 +1,5 @@
 import streamlit as st
 import json
-import time
 from PIL import Image
 import pypdf
 import docx
@@ -21,6 +20,145 @@ def get_flexible_text(row, possible_names):
                 return val
     return "None recorded"
 
+
+def build_lesson_prediction_prompt(
+    lesson_content,
+    profiles_text,
+    pupil_count,
+    cohort,
+    subject,
+    age_context,
+    key_stage,
+):
+    """Build an evidence-grounded lesson-risk and response-prediction prompt."""
+    return f"""
+    You are an expert UK ITT curriculum mentor and assessment designer. Analyse a
+    planned lesson from outside the learner: do not claim that an LLM simulation proves
+    what pupils know or whether the lesson will work.
+
+    Subject: {subject}
+    Cohort: {cohort} ({age_context})
+    Curriculum stage: {key_stage}
+
+    LESSON PLAN:
+    {lesson_content or "The lesson plan is supplied in the attached image."}
+
+    COMPACT, PRIVACY-MINIMISED PUPIL RESPONSE PROFILES ({pupil_count} pupils):
+    {profiles_text}
+
+    EPISTEMIC RULES:
+    - Every pupil response is a profile-informed prediction for teacher rehearsal, not
+      observed evidence and not a claim about what that pupil will definitely say.
+    - "Probable" means strongly supported by the lesson demands and supplied profile.
+      "Possible" means a credible alternative worth rehearsing.
+    - Predict the most plausible age-appropriate response form: secure, partial,
+      misconception, slip, uncertain or no attempt.
+    - Include probable and possible subject-specific misconceptions where justified.
+      A realistic response may be "I don't know", "not sure", a fragment, silence or a
+      refusal. Never add hidden correct reasoning to make a non-attempt informative.
+    - Do not make pupils unusually articulate, compliant or uniformly successful.
+    - Do not infer a response from a protected characteristic or SEND label alone.
+    - If evidence is missing from the lesson, say "Not visible"; do not invent it.
+
+    ANALYSIS REQUIREMENTS:
+    1. Check curriculum pitch and prerequisite knowledge for {key_stage} {subject}.
+    2. Identify explanation jumps, ambiguous wording, reading/vocabulary demand,
+       working-memory load, weak modelling and transitions between guided and
+       independent practice.
+    3. Identify where probable and possible misconceptions could be elicited.
+    4. Check whether planned questions reveal partial understanding, misconceptions
+       and non-attempts before the lesson moves on.
+    5. Use profiles as planning evidence for access hypotheses while preserving high
+       expectations and avoiding low-ceiling tasks.
+    6. For every risk, state the source evidence, likelihood, practical repair and a
+       live check that could confirm or disconfirm the prediction with real pupils.
+
+    ANTI-PATTERN GUARDRAILS:
+    - Do not use VAK learning styles, left/right-brain claims or the Learning Pyramid.
+    - Do not suggest "mild, spicy, hot" tasks or fixed low-ability worksheets.
+    - Do not expose private home-life or safeguarding information.
+
+    Return ONLY valid JSON:
+    {{
+      "metrics": {{
+        "high_priority_risks": <non-negative integer>,
+        "possible_risks": <non-negative integer>,
+        "prerequisites_not_visible": <non-negative integer>,
+        "assessment_gaps": <non-negative integer>,
+        "overall_risk": "<Low, Moderate or High>",
+        "confidence": "<Low, Medium or High>"
+      }},
+      "overview": "<2-3 sentences separating evidence from prediction>",
+      "audit": {{
+        "curriculum_pitch": "<evidence-grounded judgement>",
+        "prerequisites": "<secured, assumed or not visible>",
+        "explanation_and_modelling": "<analysis>",
+        "task_and_language_demand": "<analysis>",
+        "checking_for_understanding": "<analysis>"
+      }},
+      "risk_register": [
+        {{
+          "location": "<lesson phase/task/question>",
+          "risk_type": "<prerequisite, misconception, ambiguity, cognitive load, access or assessment>",
+          "likelihood": "<Probable or Possible>",
+          "source_evidence": "<specific feature in the supplied lesson>",
+          "prediction": "<what may break and why>",
+          "suggested_change": "<precise repair>",
+          "live_check": "<what to check with real pupils>"
+        }}
+      ],
+      "profile_predictions": [
+        {{
+          "name": "<exact pupil name from the supplied profiles>",
+          "profile_basis": "<non-sensitive qualities relevant to this lesson>",
+          "most_likely_response": "<age-authentic predicted answer form; may include IDK>",
+          "probable_misconception": "<specific misconception or 'None strongly indicated'>",
+          "possible_misconception": "<credible alternative misconception>",
+          "confidence": "<Low, Medium or High>",
+          "planning_response": "<high-expectation scaffold, probe or extension>",
+          "verify_live": "<question or observable evidence needed in the real lesson>"
+        }}
+      ],
+      "priority_actions": [
+        {{
+          "action": "<specific lesson revision>",
+          "reason": "<why it improves access or diagnosis>",
+          "evidence_to_collect": "<real-pupil evidence to collect>"
+        }}
+      ],
+      "limitations": "<one sentence stating that predictions require real-pupil validation>"
+    }}
+
+    Select exactly 4 distinct pupils for profile_predictions, representing contrasting
+    attainment, confidence, participation, processing and access patterns rather than
+    simply selecting pupils with SEND.
+    """
+
+
+def normalise_lesson_prediction_result(result, allowed_names):
+    """Constrain named predictions and list-shaped model output."""
+    clean_result = result if isinstance(result, dict) else {}
+    for dict_key in ("metrics", "audit"):
+        if not isinstance(clean_result.get(dict_key), dict):
+            clean_result[dict_key] = {}
+    for list_key in ("risk_register", "profile_predictions", "priority_actions"):
+        if not isinstance(clean_result.get(list_key), list):
+            clean_result[list_key] = []
+        clean_result[list_key] = [
+            item
+            for item in clean_result[list_key]
+            if isinstance(item, dict)
+        ]
+
+    allowed = {str(name).strip() for name in allowed_names}
+    clean_result["profile_predictions"] = [
+        prediction
+        for prediction in clean_result["profile_predictions"]
+        if str(prediction.get("name", "")).strip() in allowed
+    ][:4]
+    return clean_result
+
+
 def render_stress_tester(df, cohort, subject="General"):
     st.subheader(f"🌩️ Lesson Plan Stress-Tester: {cohort} {subject}")
     
@@ -32,9 +170,10 @@ def render_stress_tester(df, cohort, subject="General"):
 
     # --- THE SIDEBAR LEGEND (Framework Clarity) ---
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🧬 Simulation Frameworks")
+    st.sidebar.markdown("### 🧬 Prediction framework")
     st.sidebar.caption(
-        "This stress-test evaluates your lesson against standard UK ITT Core Content Framework metrics:\n\n"
+        "This audit predicts plausible pressure points for rehearsal; it does not "
+        "simulate proof that pupils have learned. It draws on:\n\n"
         "* **UK National Curriculum:** Age-appropriate pitching for KS3/KS4.\n"
         "* **Rosenshine's Principles:** Small steps modeling, guided practice, active checks.\n"
         "* **Cognitive Load Theory (Sweller):** Working memory optimization & schema integration.\n"
@@ -84,14 +223,16 @@ def render_stress_tester(df, cohort, subject="General"):
     st.markdown("---")
     
     if not uploaded_file:
-        st.info("👆 Please upload a lesson plan document to begin the simulation.")
+        st.info("👆 Please upload a lesson plan document to begin the prediction audit.")
         return
 
     final_lesson_content = extracted_text.strip()
 
     # --- 2. EXECUTE THE STRESS TEST ---
-    if st.button("🚀 Stress-Test Lesson", type="primary", width="stretch"):
-        with st.spinner(f"Simulating the lesson against student profiles and the National Curriculum..."):
+    if st.button("🚀 Analyse likely pressure points", type="primary", width="stretch"):
+        with st.spinner(
+            "Analysing lesson evidence and generating profile-informed predictions..."
+        ):
             
             # Contextualize Age and Curriculum Stage
             if cohort == "Year 7":
@@ -113,62 +254,15 @@ def render_stress_tester(df, cohort, subject="General"):
                 profiles.append(f"- {name}: {response_profile}")
             profiles_text = "\n".join(profiles)
 
-            system_prompt = f"""
-            You are an elite UK Higher Education Initial Teacher Training (ITT) tutor and curriculum mentor.
-            You are conducting a lesson simulation audit for a trainee's lesson plan.
-            Subject: {subject}. Cohort: {cohort} (Age range: {age_context}). Educational Stage: {key_stage}.
-            
-            Evaluate this lesson plan against the compact, privacy-minimised profiles of these {len(df)} students:
-            {profiles_text}
-            
-            TRAINEE'S LESSON PLAN INPUT:
-            {final_lesson_content}
-            
-            ASSESSMENT MODEL OBJECTIVES:
-            1. UK National Curriculum Alignment: Cross-reference the content pitch against the UK National Curriculum for {key_stage} {subject}. Flag if it is too elementary, developmentally inappropriate, or strays into A-Level complexity.
-            2. Rosenshine's Principles of Instruction: Verify if complex tasks are broken down into small, digestible chunks with active modeling.
-            3. Cognitive Load Theory (Sweller): Identify hidden memory bottle-necks, lack of procedural automaticity, or layout/presentation overload.
-            4. Tom Sherrington's 'First Principles' of Teaching: Audit the transition formatting between instructional teaching, guided practice, and independent application.
-            5. Adaptive Teaching & Inclusion: Balance academic attainment (KS2 scores/target grades) with their SEN needs and personal backgrounds. Do not over-fixate on hobbies; prioritize academic scaffolding.
-
-            STRICT ANTI-PATTERN GUARDRAILS (CRITICAL):
-            Under NO circumstances may your evaluation or actionable tweaks rely on debunked educational neuromyths or superficial differentiation fads. 
-            - DO NOT mention or validate VAK Learning Styles (Visual, Auditory, Kinesthetic).
-            - DO NOT suggest "kinesthetic" activities as an intervention for SEN or engagement.
-            - DO NOT reference left-brain/right-brain dominance.
-            - DO NOT reference the Learning Pyramid / Dale's Cone of Experience.
-            - DO NOT use or recommend "mild, spicy, hot" (or any similar tiered) challenge systems for differentiation. Differentiation should be achieved through scaffolding UP to high expectations, not by capping task difficulty and encouraging self-limiting behavior.
-            - Base all engagement strategies on motivation through success, schema building, and checking for understanding.
-
-            TECHNICAL COMPLIANCE RULE: You must return ONLY a clean JSON object using this exact structure:
-            {{
-              "metrics": {{
-                "predicted_mastery_count": <int>,
-                "high_risk_overload_count": <int>,
-                "pacing_status_label": "<Strictly 1 to 2 words ONLY. e.g., 'Optimal', 'Too Fast', 'At Risk', 'Uneven'>",
-                "pacing_detailed_desc": "<1 sentence detailing the pacing and transition flow behavior>"
-              }},
-              "critique": {{
-                "curriculum_pitch": "<1-2 sentences verifying if the pitch matches UK National Curriculum expectations for {key_stage} ({age_context})>",
-                "modeling": "<1-2 sentences critiquing modeling via Rosenshine/Sherrington models>",
-                "guided_practice": "<1-2 sentences evaluating the fading of scaffolding>",
-                "checking_for_understanding": "<1-2 sentences auditing the AfL tracking mechanisms>"
-              }},
-              "focus_group": [
-                {{
-                  "name": "<Exact student name>",
-                  "profile_type": "<e.g., SEN Support, High Attainer, Disengaged>",
-                  "experience": "<1-2 sentences detailing how they will cope, balancing their academic attainment with their background context>"
-                }}
-              ],
-              "actionable_tweaks": [
-                "<Actionable pedagogical change 1>",
-                "<Actionable pedagogical change 2>",
-                "<Actionable pedagogical change 3>"
-              ]
-            }}
-            * Ensure the focus_group contains exactly 4 distinct students selected out of the class list.
-            """
+            system_prompt = build_lesson_prediction_prompt(
+                final_lesson_content,
+                profiles_text,
+                len(df),
+                cohort,
+                subject,
+                age_context,
+                key_stage,
+            )
 
             model = genai.GenerativeModel(ANALYSIS_MODEL)
             contents = [system_prompt]
@@ -183,57 +277,162 @@ def render_stress_tester(df, cohort, subject="General"):
                 raw_text = raw_text.replace("`" * 3 + "json", "")
                 raw_text = raw_text.replace("`" * 3, "")
                 result = json.loads(raw_text.strip())
+                result = normalise_lesson_prediction_result(
+                    result,
+                    df["Full Name"].astype(str).tolist(),
+                )
                 
                 # --- 3. RENDER THE DASHBOARD ---
-                st.success("✅ Simulation Matrix Compiled!")
+                st.success("✅ Evidence-grounded prediction audit compiled")
+                st.caption(
+                    "These are profile-informed planning predictions, not measurements "
+                    "of learning or guarantees about individual pupils."
+                )
                 
                 # Zone 1: Metrics
-                st.markdown("### 📊 Class Survival Metrics")
+                st.markdown("### 📊 Planning risk indicators")
                 metrics = result.get("metrics", {})
                 
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Predicted Mastery", f"{metrics.get('predicted_mastery_count', 0)} / {len(df)}")
-                m2.metric("Working Memory Overload", f"{metrics.get('high_risk_overload_count', 0)} Students", delta="Scaffolding Required", delta_color="inverse")
-                m3.metric("Pacing Status", metrics.get('pacing_status_label', 'Review Flow'))
-                
-                if "pacing_detailed_desc" in metrics:
-                    st.markdown(f"⏱️ **Pacing Analysis:** *{metrics.get('pacing_detailed_desc')}*")
+                metric_columns = st.columns(6)
+                metric_columns[0].metric(
+                    "Overall risk",
+                    metrics.get("overall_risk", "Review"),
+                )
+                metric_columns[1].metric(
+                    "Confidence",
+                    metrics.get("confidence", "Medium"),
+                )
+                metric_columns[2].metric(
+                    "High-priority risks",
+                    metrics.get("high_priority_risks", 0),
+                )
+                metric_columns[3].metric(
+                    "Possible risks",
+                    metrics.get("possible_risks", 0),
+                )
+                metric_columns[4].metric(
+                    "Prerequisites unclear",
+                    metrics.get("prerequisites_not_visible", 0),
+                )
+                metric_columns[5].metric(
+                    "Assessment gaps",
+                    metrics.get("assessment_gaps", 0),
+                )
+
+                st.info(result.get("overview", "No overview was returned."))
                 
                 st.divider()
                 
                 # Zone 2: Pedagogy Critique
-                st.markdown("### 🧠 'First Principles' & Curriculum Critique")
-                critique = result.get("critique", {})
+                st.markdown("### 🧠 Lesson evidence audit")
+                audit = result.get("audit", {})
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.info(f"**National Curriculum & Pitch ({key_stage})**\n\n{critique.get('curriculum_pitch', 'N/A')}")
-                    st.success(f"**Modeling & Schema (Rosenshine)**\n\n{critique.get('modeling', 'N/A')}")
+                    st.info(
+                        f"**National Curriculum & Pitch ({key_stage})**\n\n"
+                        f"{audit.get('curriculum_pitch', 'Not visible')}"
+                    )
+                    st.success(
+                        "**Prerequisites**\n\n"
+                        f"{audit.get('prerequisites', 'Not visible')}"
+                    )
+                    st.warning(
+                        "**Explanation and modelling**\n\n"
+                        f"{audit.get('explanation_and_modelling', 'Not visible')}"
+                    )
                 with c2:
-                    st.warning(f"**Guided Practice Mechanics**\n\n{critique.get('guided_practice', 'N/A')}")
-                    st.error(f"**AfL Checkpoints (Sherrington)**\n\n{critique.get('checking_for_understanding', 'N/A')}")
-                
+                    st.warning(
+                        "**Task and language demand**\n\n"
+                        f"{audit.get('task_and_language_demand', 'Not visible')}"
+                    )
+                    st.error(
+                        "**Checking for understanding**\n\n"
+                        f"{audit.get('checking_for_understanding', 'Not visible')}"
+                    )
+
+                st.markdown("### ⚠️ Evidence-grounded risk register")
+                risks = result.get("risk_register", [])
+                if not risks:
+                    st.caption("No specific risk was returned.")
+                for index, risk in enumerate(risks, start=1):
+                    with st.expander(
+                        f"{index}. {risk.get('likelihood', 'Possible')} · "
+                        f"{risk.get('location', 'Lesson')} — "
+                        f"{risk.get('risk_type', 'Risk')}",
+                        expanded=index <= 2,
+                    ):
+                        st.write(risk.get("prediction", ""))
+                        st.caption(
+                            f"Source evidence: {risk.get('source_evidence', 'Not visible')}"
+                        )
+                        st.success(
+                            f"Suggested change: {risk.get('suggested_change', '')}"
+                        )
+                        st.info(
+                            f"Check with real pupils: {risk.get('live_check', '')}"
+                        )
+
                 st.divider()
                 
-                # Zone 3: Focus Group
-                st.markdown("### 🔬 Student Focus Group (Academic & Contextual)")
-                st.caption("How 4 specific students will likely experience this lesson based on their full profiles:")
-                focus_group = result.get("focus_group", [])
+                # Zone 3: Profile-informed predictions
+                st.markdown("### 🔬 Profile-informed response predictions")
+                st.caption(
+                    "Best estimates for rehearsal. They include probable and possible "
+                    "misconceptions and may predict a partial answer or 'I don't know'."
+                )
+                predictions = result.get("profile_predictions", [])
                 
                 cols = st.columns(2)
-                for idx, student in enumerate(focus_group[:4]):
+                for idx, student in enumerate(predictions[:4]):
                     col = cols[idx % 2]
                     with col:
-                        with st.expander(f"👤 {student.get('name', 'Student')} — {student.get('profile_type', 'Profile')}", expanded=True):
-                            st.write(student.get("experience", "No data compiled."))
+                        with st.expander(
+                            f"👤 {student.get('name', 'Pupil')} — "
+                            f"{student.get('confidence', 'Medium')} confidence",
+                            expanded=True,
+                        ):
+                            st.caption(
+                                f"Profile basis: {student.get('profile_basis', 'Not stated')}"
+                            )
+                            st.write(
+                                "**Most likely response:** "
+                                f"{student.get('most_likely_response', 'Not predicted')}"
+                            )
+                            st.warning(
+                                "**Probable misconception:** "
+                                f"{student.get('probable_misconception', 'None strongly indicated')}"
+                            )
+                            st.info(
+                                "**Possible misconception:** "
+                                f"{student.get('possible_misconception', 'Not identified')}"
+                            )
+                            st.success(
+                                "**Planning response:** "
+                                f"{student.get('planning_response', 'Not identified')}"
+                            )
+                            st.caption(
+                                "Verify live: "
+                                f"{student.get('verify_live', 'Collect real-pupil evidence')}"
+                            )
                             
                 st.divider()
                 
-                # Zone 4: Actionable Tweaks
-                st.markdown("### 🛠️ The 'S-Plan' Recommended Interventions")
-                tweaks = result.get("actionable_tweaks", [])
-                for i, tweak in enumerate(tweaks):
-                    st.markdown(f"**{i+1}.** {tweak}")
+                # Zone 4: Priority revisions and validation
+                st.markdown("### 🛠️ Priority revisions and evidence to collect")
+                actions = result.get("priority_actions", [])
+                for index, action in enumerate(actions, start=1):
+                    st.markdown(
+                        f"**{index}. {action.get('action', 'Review lesson')}**  \n"
+                        f"{action.get('reason', '')}  \n"
+                        f"*Collect: {action.get('evidence_to_collect', '')}*"
+                    )
+                st.warning(
+                    result.get(
+                        "limitations",
+                        "Validate every prediction using evidence from real pupils.",
+                    )
+                )
 
             except Exception as e:
                 st.error(f"Failed to compile the dashboard structure. Error: {e}")
