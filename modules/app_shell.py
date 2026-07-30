@@ -431,7 +431,8 @@ def render_home(
         (
             "03 · REHEARSE",
             "Practise and notice",
-            "Rehearse interactions, check understanding and circulate through simulated learning.",
+            "Rehearse interactions and observation using profile-informed predicted "
+            "responses, including misconceptions and non-attempts.",
             "Simulator · Academic AfL · Observe Learning",
         ),
     ]
@@ -465,10 +466,12 @@ def render_home(
         st.markdown("## Before using AI practice")
         with st.container(border=True):
             st.write(
-                "Student simulations use the configured Gemini key. Voice is optional "
-                "and uses ElevenLabs when its key is present."
+                "Gemini generates profile-informed predictions for analysis and "
+                "rehearsal. Voice is optional and uses ElevenLabs when its key is present."
             )
             st.caption(
                 "Keep live pupil data within your school’s approved environment and "
-                "use simulations as rehearsal prompts, not as pupil judgements."
+                "treat every response as a plausible prediction—not observed evidence, "
+                "a guaranteed reaction or a pupil judgement. Validate important "
+                "predictions with real pupil work and questioning."
             )
