@@ -4,7 +4,11 @@ import random
 import re
 from PIL import Image
 from config import REACTION_MODEL
-from modules.app_shell import get_teacher_display_name
+from modules.app_shell import (
+    get_teacher_address_instruction,
+    get_teacher_address_options,
+    get_teacher_display_name,
+)
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
@@ -478,10 +482,12 @@ def render_learning_summary(summary):
 
 def render_observation_room(df, cohort):
     teacher_name = get_teacher_display_name()
+    teacher_addresses = get_teacher_address_options(teacher_name)
+    address_instruction = get_teacher_address_instruction(teacher_name)
     teacher_key = re.sub(
         r"[^a-z0-9]+",
         "_",
-        teacher_name.casefold(),
+        "|".join(teacher_addresses).casefold(),
     ).strip("_") or "teacher"
     if "seating_plans" not in st.session_state:
         st.session_state.seating_plans = {}
@@ -490,7 +496,7 @@ def render_observation_room(df, cohort):
         df,
         cohort,
     )
-    observation_context = f"{plan_key}|{teacher_name.casefold()}"
+    observation_context = f"{plan_key}|{'|'.join(teacher_addresses).casefold()}"
     previous_context = st.session_state.get("obs_class_context")
     if previous_context and previous_context != observation_context:
         reset_keys = {
@@ -638,9 +644,7 @@ def render_observation_room(df, cohort):
                     f"Compact pupil response profile: {response_profile}\n"
                     f"Task: '{st.session_state.obs_task}'\n"
                     f"{event_context}"
-                    f"The teacher's exact name/title is \"{teacher_name}\". If you "
-                    "address them, use that exact form and never substitute Sir, Miss "
-                    "or another name.\n"
+                    f"{address_instruction}\n"
                     f"Your current internal motivation level is {current_mot}/100.\n\n"
                     f"Transcript:\n{transcript}\n\n"
                     "CRITICAL RULES:\n"
@@ -723,8 +727,12 @@ def render_observation_room(df, cohort):
             "are common; toilet requests and peer disruption are rare class-level events."
         )
         st.caption(
-            f"Teacher name/title: **{teacher_name}** · Change this using the shared "
-            "sidebar field."
+            f"Teacher speaker label: **{teacher_name}** · Pupils may address you as "
+            + " or ".join(
+                f"**{address}**"
+                for address in teacher_addresses
+            )
+            + ". Change this in the sidebar."
         )
         current_task = st.text_area("Describe the task:", placeholder="e.g., 'Copy the perspective drawing.'", value=st.session_state.obs_task)
         
@@ -1073,7 +1081,7 @@ def render_observation_room(df, cohort):
                     
                     broadcast_prompt = (
                         "**[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**\n"
-                        f"The teacher's exact name/title is \"{teacher_name}\".\n"
+                        f"{address_instruction}\n"
                         f"{teacher_name} just addressed the entire class aloud: "
                         f"'{class_announcement}'\n\n"
                         f"Current Class Profiles:\n{profiles_str}\n\n"
