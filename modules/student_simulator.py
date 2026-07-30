@@ -93,7 +93,7 @@ def render_simulator(df, cohort):
 
     with col2:
         if "latest_audio_sim" in st.session_state:
-            st.audio(st.session_state["latest_audio_sim"], format="audio/mp3", autoplay=True)
+            st.audio(st.session_state["latest_audio_sim"], format="audio/wav", autoplay=True)
             del st.session_state["latest_audio_sim"]
 
         if chat_key not in st.session_state:
