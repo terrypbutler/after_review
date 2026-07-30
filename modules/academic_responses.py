@@ -10,6 +10,7 @@ from io import BytesIO
 import wave
 from PIL import Image
 from config import REACTION_MODEL
+from modules.app_shell import get_teacher_display_name
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
@@ -87,11 +88,14 @@ def _append_afl_comment(role, speaker, content, source="spoken", marker=None):
 
 def _record_opening_question(teacher_name, teacher_question):
     clean_question = str(teacher_question).strip()
+    clean_teacher_name = " ".join(str(teacher_name or "").split()) or "Teacher"
     return _append_afl_comment(
         "teacher",
-        teacher_name,
+        clean_teacher_name,
         clean_question,
-        marker=f"opening-question::{clean_question}",
+        marker=(
+            f"opening-question::{clean_teacher_name.casefold()}::{clean_question}"
+        ),
     )
 
 
@@ -203,7 +207,7 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
 
     chat_prompt = f"""
     You are roleplaying as {target_name}, a {cohort} student.
-    The subject is {subject}. The teacher's name/title is {teacher_name}.
+    The subject is {subject}. The teacher must be addressed exactly as "{teacher_name}".
     Use this compact pupil response profile:
     {response_profile}
 
@@ -220,6 +224,8 @@ def generate_discussion_reply(target_name, target_row, cohort, subject, teacher_
     2. Remember every earlier contribution. If asked about another student's answer,
        explicitly agree, disagree, correct, extend or improve it in a realistic way.
     3. Do not claim that another student's comment was your own.
+       Never substitute "Sir", "Miss" or another title for "{teacher_name}" unless
+       that is exactly the supplied teacher name/title.
     4. Match the student's likely attainment and needs. Do not automatically become
        correct just because the teacher probes. Reveal the pupil's thinking; self-correct
        only when the latest prompt or a classmate has supplied a genuinely useful scaffold.
@@ -821,10 +827,15 @@ def fetch_ai_answers(
     if is_written:
         address_rule = "4. Written Work: DO NOT use the teacher's name or titles like 'Sir' or 'Miss' in the response. It must read entirely like an exercise book or whiteboard."
     else:
-        address_rule = f"4. Teacher Address: The students should occasionally use the teacher's name/title ('{teacher_name}') naturally in their verbal responses (e.g., 'I think it's 4, {teacher_name}')."
+        address_rule = (
+            f"4. Teacher Address: The exact teacher name/title is '{teacher_name}'. "
+            f"Students may use '{teacher_name}' naturally, but MUST NOT replace it "
+            "with 'Sir', 'Miss' or another name/title."
+        )
     
     prompt = f"""
-    A trainee teacher (addressed as '{teacher_name}') is conducting a {subject} lesson for a class of {cohort} students (approximate age: {age_context}).
+    A trainee teacher whose exact name/title is '{teacher_name}' is conducting a
+    {subject} lesson for a class of {cohort} students (approximate age: {age_context}).
     The teacher has asked the class: "{question}"
     
     Here are the compact, privacy-minimised response profiles for the students answering:
@@ -927,7 +938,8 @@ def generate_peer_discussion(
     prompt = f"""
     **[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**
     A {cohort} {subject} class has been asked: "{question}"
-    The teacher is addressed as "{teacher_name}".
+    The teacher must be addressed exactly as "{teacher_name}". Do not replace this
+    with "Sir", "Miss" or another title.
 
     Simulate {format_description}. The pupils are:
     {chr(10).join(profiles)}
@@ -1360,7 +1372,8 @@ def render_academic_responses(df, cohort, subject="General"):
         df,
         cohort,
     )
-    class_context = f"{plan_key}|{subject}"
+    teacher_name = get_teacher_display_name()
+    class_context = f"{plan_key}|{subject}|{teacher_name.casefold()}"
     previous_context = st.session_state.get("afl_class_context")
     if previous_context and previous_context != class_context:
         _reset_academic_afl_state()
@@ -1404,10 +1417,9 @@ def render_academic_responses(df, cohort, subject="General"):
 
     # --- 1. THE INPUT AREA ---
     st.markdown("### 1. Present the Material")
-    teacher_name = st.text_input(
-        "Your Title/Name (e.g., Mr. Smith, Miss, Sir):",
-        value="Sir",
-        key="afl_teacher_name",
+    st.caption(
+        f"Teacher name/title: **{teacher_name}** · Change this using the shared "
+        "sidebar field."
     )
     teacher_question = st.text_area(
         "Ask the class your opening question:",
