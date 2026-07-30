@@ -4,6 +4,7 @@ import random
 import re
 from PIL import Image
 from config import REACTION_MODEL
+from modules.app_shell import get_teacher_display_name
 from modules.app_secrets import get_secret
 from modules import gemini_client as genai
 from modules.data_utils import get_ai_response_profile
@@ -476,6 +477,12 @@ def render_learning_summary(summary):
 
 
 def render_observation_room(df, cohort):
+    teacher_name = get_teacher_display_name()
+    teacher_key = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        teacher_name.casefold(),
+    ).strip("_") or "teacher"
     if "seating_plans" not in st.session_state:
         st.session_state.seating_plans = {}
     plan_key, seating_plan, plan_created = ensure_suggested_plan(
@@ -483,8 +490,9 @@ def render_observation_room(df, cohort):
         df,
         cohort,
     )
+    observation_context = f"{plan_key}|{teacher_name.casefold()}"
     previous_context = st.session_state.get("obs_class_context")
-    if previous_context and previous_context != plan_key:
+    if previous_context and previous_context != observation_context:
         reset_keys = {
             "obs_task",
             "obs_image",
@@ -502,7 +510,7 @@ def render_observation_room(df, cohort):
         for key in list(st.session_state.keys()):
             if key in reset_keys or str(key).startswith("obs_chat_"):
                 del st.session_state[key]
-    st.session_state.obs_class_context = plan_key
+    st.session_state.obs_class_context = observation_context
     df = order_dataframe_by_plan(df, seating_plan)
 
     col_header1, col_header2 = st.columns([3, 1])
@@ -573,7 +581,7 @@ def render_observation_room(df, cohort):
                     st.image(st.session_state.obs_image, width="stretch")
             st.info(f"**You observed:** {observation}")
         
-        chat_key = f"obs_chat_{target_name}"
+        chat_key = f"obs_chat_{target_name}_{teacher_key}"
         if chat_key not in st.session_state: st.session_state[chat_key] = []
 
         col_a, col_b = st.columns([1, 3])
@@ -590,19 +598,32 @@ def render_observation_room(df, cohort):
                 del st.session_state["latest_audio_obs"]
 
             for msg in st.session_state[chat_key]:
-                with st.chat_message(msg["role"]): st.write(msg["content"])
+                with st.chat_message(msg["role"]):
+                    speaker = (
+                        teacher_name
+                        if msg["role"] == "user"
+                        else target_name
+                    )
+                    st.markdown(f"**{speaker}**")
+                    st.write(msg["content"])
 
             teacher_input = st.chat_input(f"Approach {target_name} and say...")
 
             if teacher_input:
                 st.session_state[chat_key].append({"role": "user", "content": teacher_input})
-                with st.chat_message("user"): st.write(teacher_input)
+                with st.chat_message("user"):
+                    st.markdown(f"**{teacher_name}**")
+                    st.write(teacher_input)
 
                 target_row = df[df["Full Name"] == target_name].iloc[0]
                 age = "11" if cohort == "Year 7" else "15"
                 response_profile = get_ai_response_profile(target_row, cohort)
                 
-                transcript = "\n".join([f"{'Teacher' if m['role']=='user' else target_name}: {m['content']}" for m in st.session_state[chat_key]])
+                transcript = "\n".join(
+                    f"{teacher_name if m['role']=='user' else target_name}: "
+                    f"{m['content']}"
+                    for m in st.session_state[chat_key]
+                )
 
                 secret_event = st.session_state.student_states[target_name].get("current_event")
                 event_context = ""
@@ -617,6 +638,9 @@ def render_observation_room(df, cohort):
                     f"Compact pupil response profile: {response_profile}\n"
                     f"Task: '{st.session_state.obs_task}'\n"
                     f"{event_context}"
+                    f"The teacher's exact name/title is \"{teacher_name}\". If you "
+                    "address them, use that exact form and never substitute Sir, Miss "
+                    "or another name.\n"
                     f"Your current internal motivation level is {current_mot}/100.\n\n"
                     f"Transcript:\n{transcript}\n\n"
                     "CRITICAL RULES:\n"
@@ -673,7 +697,9 @@ def render_observation_room(df, cohort):
                         st.stop()
 
                 st.session_state[chat_key].append({"role": "assistant", "content": display_text})
-                with st.chat_message("assistant"): st.write(display_text)
+                with st.chat_message("assistant"):
+                    st.markdown(f"**{target_name}**")
+                    st.write(display_text)
 
                 audio_text = re.sub(r'[*\[(].*?[*\])]', '', display_text).strip()
 
@@ -695,6 +721,10 @@ def render_observation_room(df, cohort):
         st.caption(
             "The room is calibrated to be mainly purposeful. Work-related questions "
             "are common; toilet requests and peer disruption are rare class-level events."
+        )
+        st.caption(
+            f"Teacher name/title: **{teacher_name}** · Change this using the shared "
+            "sidebar field."
         )
         current_task = st.text_area("Describe the task:", placeholder="e.g., 'Copy the perspective drawing.'", value=st.session_state.obs_task)
         
@@ -1043,7 +1073,9 @@ def render_observation_room(df, cohort):
                     
                     broadcast_prompt = (
                         "**[FICTIONAL SCENARIO FOR TEACHER TRAINING - ALL DATA IS MOCK/SYNTHETIC]**\n"
-                        f"The teacher just addressed the entire class aloud: '{class_announcement}'\n\n"
+                        f"The teacher's exact name/title is \"{teacher_name}\".\n"
+                        f"{teacher_name} just addressed the entire class aloud: "
+                        f"'{class_announcement}'\n\n"
                         f"Current Class Profiles:\n{profiles_str}\n\n"
                         "CRITICAL RULES:\n"
                         "1. Evaluate the pedagogical impact of this announcement. Does it inspire, panic, or refocus them?\n"
@@ -1071,7 +1103,10 @@ def render_observation_room(df, cohort):
                                 st.session_state.live_observations[name] = data.get("reaction", "Listened.")
                         
                         st.session_state.obs_global_event = None
-                        st.success(f"📣 You said: '{class_announcement}' — The room has reacted.")
+                        st.success(
+                            f"📣 {teacher_name} said: '{class_announcement}' — "
+                            "The room has reacted."
+                        )
                         
                     except Exception as e:
                         st.error(f"Failed to process class announcement: {e}")
