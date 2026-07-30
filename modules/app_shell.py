@@ -252,6 +252,44 @@ def apply_app_styles() -> None:
     )
 
 
+def normalise_teacher_display_name(value) -> str:
+    """Return one safe, consistent teacher name/title for prompts and transcripts."""
+    clean_name = " ".join(str(value or "").replace("\n", " ").split())
+    return clean_name[:60] or "Teacher"
+
+
+def get_teacher_display_name() -> str:
+    """Read the shared teacher identity without creating another widget."""
+    return normalise_teacher_display_name(
+        st.session_state.get("teacher_display_name", "")
+    )
+
+
+def render_teacher_identity() -> str:
+    """Render the single teacher-name control shared by all practice pages."""
+    if "teacher_display_name" not in st.session_state:
+        legacy_name = st.session_state.get("afl_teacher_name", "")
+        st.session_state.teacher_display_name = (
+            normalise_teacher_display_name(legacy_name)
+            if str(legacy_name).strip()
+            else ""
+        )
+
+    st.sidebar.divider()
+    st.sidebar.text_input(
+        "Teacher name/title",
+        key="teacher_display_name",
+        placeholder="e.g. Mr Smith, Miss Patel or Sir",
+        help=(
+            "This exact name/title is used in pupil responses and teacher-labelled "
+            "transcripts throughout the practice tools."
+        ),
+    )
+    teacher_name = get_teacher_display_name()
+    st.sidebar.caption(f"Pupils will address you as **{teacher_name}**.")
+    return teacher_name
+
+
 def render_navigation() -> str:
     st.sidebar.markdown(
         f"""
