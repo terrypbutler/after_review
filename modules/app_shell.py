@@ -265,6 +265,47 @@ def get_teacher_display_name() -> str:
     )
 
 
+def _normalise_optional_teacher_address(value) -> str:
+    """Clean an optional pupil form of address without inventing a fallback."""
+    return " ".join(str(value or "").replace("\n", " ").split())[:40]
+
+
+def get_teacher_address_options(teacher_name=None) -> tuple[str, ...]:
+    """Return the permitted ways pupils may address the current teacher."""
+    primary_name = normalise_teacher_display_name(
+        teacher_name if teacher_name is not None else get_teacher_display_name()
+    )
+    if not st.session_state.get("teacher_allow_alternative_address", False):
+        return (primary_name,)
+
+    alternative = _normalise_optional_teacher_address(
+        st.session_state.get("teacher_alternative_address", "Sir")
+    )
+    if not alternative or alternative.casefold() == primary_name.casefold():
+        return (primary_name,)
+    return primary_name, alternative
+
+
+def get_teacher_address_instruction(teacher_name=None) -> str:
+    """Build consistent prompt guidance for realistic pupil forms of address."""
+    addresses = get_teacher_address_options(teacher_name)
+    primary_name = addresses[0]
+    if len(addresses) == 1:
+        return (
+            f'The teacher is identified as "{primary_name}". If a pupil addresses '
+            f'the teacher directly, use "{primary_name}" exactly and do not invent '
+            "another title. Do not force a form of address into every response."
+        )
+
+    alternative = addresses[1]
+    return (
+        f'The teacher is identified in transcripts as "{primary_name}". When a pupil '
+        f'addresses the teacher directly, they may naturally use either "{primary_name}" '
+        f'or "{alternative}". Vary these across pupils and responses, while allowing '
+        "many responses to use no form of address. Do not use any other name or title."
+    )
+
+
 def render_teacher_identity() -> str:
     """Render the single teacher-name control shared by all practice pages."""
     if "teacher_display_name" not in st.session_state:
@@ -274,6 +315,10 @@ def render_teacher_identity() -> str:
             if str(legacy_name).strip()
             else ""
         )
+    if "teacher_allow_alternative_address" not in st.session_state:
+        st.session_state.teacher_allow_alternative_address = False
+    if "teacher_alternative_address" not in st.session_state:
+        st.session_state.teacher_alternative_address = "Sir"
 
     st.sidebar.divider()
     st.sidebar.text_input(
@@ -281,12 +326,31 @@ def render_teacher_identity() -> str:
         key="teacher_display_name",
         placeholder="e.g. Mr Smith, Miss Patel or Sir",
         help=(
-            "This exact name/title is used in pupil responses and teacher-labelled "
-            "transcripts throughout the practice tools."
+            "This is the consistent teacher speaker label used throughout the "
+            "practice tools."
         ),
     )
+    st.sidebar.toggle(
+        "Allow a second pupil address",
+        key="teacher_allow_alternative_address",
+        help=(
+            "When enabled, pupils can naturally alternate between your recorded "
+            "name/title and a shorter form such as Sir or Miss."
+        ),
+    )
+    if st.session_state.teacher_allow_alternative_address:
+        st.sidebar.text_input(
+            "Alternative pupil address",
+            key="teacher_alternative_address",
+            placeholder="e.g. Sir or Miss",
+        )
+
     teacher_name = get_teacher_display_name()
-    st.sidebar.caption(f"Pupils will address you as **{teacher_name}**.")
+    address_labels = " or ".join(
+        f"**{address}**"
+        for address in get_teacher_address_options(teacher_name)
+    )
+    st.sidebar.caption(f"Pupils may address you as {address_labels}.")
     return teacher_name
 
 
