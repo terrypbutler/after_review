@@ -19,7 +19,7 @@ from modules.audio_utils import (
     pcm16_to_wav,
     pcm_segments_to_wav,
 )
-from modules import gemini_client as genai
+from modules import ai_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
 from modules.seating_plan_utils import (
@@ -1556,11 +1556,8 @@ def render_academic_responses(df, cohort, subject="General"):
         )
     render_seating_plan_overview(seating_plan, df, "Academic AfL")
 
-    api_key = get_secret("GEMINI_API_KEY")
-    if not api_key:
-        st.error("⚠️ Gemini API Key missing.")
+    if not genai.configure_selected_provider():
         return
-    genai.configure(api_key=api_key)
 
     if "wb_answers" not in st.session_state: st.session_state.wb_answers = None
     if "wb_probe_selected" not in st.session_state: st.session_state.wb_probe_selected = None
