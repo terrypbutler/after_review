@@ -239,41 +239,25 @@ def render_room_configuration(plan, plan_key):
     zones = plan.setdefault("zones", DEFAULT_ZONES.copy())
     with st.expander("🏫 Classroom zones", expanded=False):
         st.caption(
-            "These settings let the checks reason about room position without a "
-            "free-drag floor-plan editor."
+            "Set where the class faces and where the teacher begins circulating."
         )
-        front_col, door_col, calm_col, teacher_col = st.columns(4)
+        front_col, teacher_col = st.columns(2)
         with front_col:
             zones["front_edge"] = st.selectbox(
-                "Board/front edge",
+                "Front of class / whiteboard",
                 ["Top", "Bottom"],
                 index=_option_index(
                     ["Top", "Bottom"], zones.get("front_edge", "Top")
                 ),
                 key=f"zone_front_{plan_key}",
             )
-        with door_col:
-            zones["door_side"] = st.selectbox(
-                "Door/resources side",
-                ["Left", "Right"],
-                index=_option_index(
-                    ["Left", "Right"], zones.get("door_side", "Left")
-                ),
-                key=f"zone_door_{plan_key}",
-            )
-        calm_options = ["Front left", "Front right", "Back left", "Back right"]
-        with calm_col:
-            zones["calm_zone"] = st.selectbox(
-                "Calm/low-traffic area",
-                calm_options,
-                index=_option_index(
-                    calm_options,
-                    zones.get("calm_zone", "Back right"),
-                    default=3,
-                ),
-                key=f"zone_calm_{plan_key}",
-            )
-        teacher_options = ["Front centre", "Door", "Back centre", "Calm area"]
+        teacher_options = [
+            "Front centre",
+            "Centre",
+            "Back centre",
+            "Left side",
+            "Right side",
+        ]
         with teacher_col:
             zones["teacher_start"] = st.selectbox(
                 "Teacher starting position",
