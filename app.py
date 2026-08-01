@@ -11,6 +11,7 @@ from modules.app_shell import (
     render_teacher_identity,
 )
 from modules.class_setup import render_class_filter, render_subject_class_setup
+from modules.ai_client import render_provider_selector
 from modules.data_loader import DataLoadError, load_data
 from modules.data_utils import count_active
 from modules.report_renderers import (
@@ -49,6 +50,7 @@ def get_cohort_data(cohort):
 
 
 page = render_navigation()
+render_provider_selector()
 render_teacher_identity()
 render_sidebar_footer(load_data.clear)
 
