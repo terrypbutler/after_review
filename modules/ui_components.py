@@ -2,6 +2,10 @@ import streamlit as st
 from html import escape
 from modules.helpers import get_field
 from modules.photo_utils import display_student_photo
+from modules.seating_plan_utils import (
+    LAYOUT_ROWS,
+    rationale_summary_lines,
+)
 
 
 def render_student_summary(row):
@@ -81,14 +85,24 @@ def render_seating_plan_overview(plan, df, context_label="this activity"):
 
     with st.expander("🪑 View classroom seating", expanded=False):
         st.caption(plan.get("source", "Saved in Seating Plan"))
-        st.markdown(
+        zones = plan.get("zones", {})
+        if zones:
+            st.caption(
+                " · ".join(
+                    f"{str(key).replace('_', ' ').title()}: {value}"
+                    for key, value in zones.items()
+                )
+            )
+        front_banner = (
             "<div style='text-align:center;background:#2C3E50;color:white;"
-            "padding:6px;border-radius:6px;margin-bottom:12px;font-weight:bold;'>"
-            "FRONT OF CLASSROOM</div>",
-            unsafe_allow_html=True,
+            "padding:6px;border-radius:6px;margin:12px 0;font-weight:bold;'>"
+            "FRONT OF CLASSROOM</div>"
         )
+        front_is_top = zones.get("front_edge", "Top") == "Top"
+        if front_is_top:
+            st.markdown(front_banner, unsafe_allow_html=True)
 
-        if plan.get("layout") == "Rows (4x8)":
+        if plan.get("layout") == LAYOUT_ROWS:
             for row_index in range(4):
                 columns = st.columns(8, gap="small")
                 for column_index, column in enumerate(columns):
@@ -117,3 +131,11 @@ def render_seating_plan_overview(plan, df, context_label="this activity"):
                             st.markdown(f"**Table {table_index + 1}**")
                             for name in names:
                                 st.caption(escape(name))
+        if not front_is_top:
+            st.markdown(front_banner, unsafe_allow_html=True)
+
+    rationale_lines = rationale_summary_lines(plan)
+    if rationale_lines:
+        with st.expander("📝 Seating rationale and review", expanded=False):
+            for line in rationale_lines:
+                st.write(f"• {line}")
