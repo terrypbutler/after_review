@@ -4,7 +4,7 @@ from html import escape
 import streamlit as st
 from config import REACTION_MODEL
 from modules.app_secrets import get_secret
-from modules import gemini_client as genai
+from modules import ai_client as genai
 from modules.photo_utils import display_student_photo
 from modules.seating_plan_store import (
     build_printable_plan_html,
@@ -486,10 +486,8 @@ def render_seating_plan(df, cohort):
     TOTAL_SEATS = 32
     if 'mentor_chat' not in st.session_state: st.session_state.mentor_chat = []
     
-    # Configure AI
-    api_key = get_secret("GEMINI_API_KEY")
-    if api_key:
-        genai.configure(api_key=api_key)
+    # The mentor is optional, so missing AI credentials are reported only when used.
+    ai_configured = genai.configure_selected_provider(show_error=False)
     
     all_students = df["Full Name"].tolist()
     assigned_students = [
@@ -692,8 +690,7 @@ def render_seating_plan(df, cohort):
     evidence_text = mentor_evidence_summary(plan, df, checks)
 
     if st.button("Evaluate My Plan", type="primary"):
-        if not api_key:
-            st.error("API Key missing.")
+        if not ai_configured and not genai.configure_selected_provider():
             return
 
         with st.spinner("Your mentor is reviewing your seating plan and route..."):
@@ -723,7 +720,14 @@ def render_seating_plan(df, cohort):
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
                 
-        teacher_reply = st.chat_input("Justify your plan to your mentor...")
+        teacher_reply = None
+        if ai_configured:
+            teacher_reply = st.chat_input("Justify your plan to your mentor...")
+        else:
+            st.caption(
+                f"Add the selected {genai.provider_name()} API key to continue "
+                "this mentor conversation."
+            )
         if teacher_reply:
             st.session_state.mentor_chat.append({"role": "user", "content": teacher_reply})
             with st.chat_message("user"):
