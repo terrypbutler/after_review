@@ -25,8 +25,16 @@ streamlit run app.py
 ```
 
 For AI features, copy `.streamlit/secrets.toml.example` to
-`.streamlit/secrets.toml` and add the required API keys. The class-information
-and planning views work without those keys.
+`.streamlit/secrets.toml` and add `GEMINI_API_KEY`, `OPENAI_API_KEY`, or both.
+Use the app-wide sidebar toggle to choose the provider. The class-information
+and planning views work without either key, and secrets should never be pasted
+into the Python source.
+
+To enable explicit seating-plan persistence, also configure
+`SEATING_PLAN_STORAGE_PATH` in `secrets.toml`. The example uses the ignored
+local `.data/` directory for development; deployments should point it at an
+approved durable school storage mount. Printable HTML and JSON exports contain
+pupil names and must remain inside the approved environment.
 
 ## Project shape
 
