@@ -466,8 +466,9 @@ def render_home(
         st.markdown("## Before using AI practice")
         with st.container(border=True):
             st.write(
-                "Gemini generates profile-informed predictions for analysis and "
-                "rehearsal. Voice is optional and uses ElevenLabs when its key is present."
+                "Your selected AI provider generates profile-informed predictions "
+                "for analysis and rehearsal. Voice is optional and uses ElevenLabs "
+                "when its key is present."
             )
             st.caption(
                 "Keep live pupil data within your school’s approved environment and "
