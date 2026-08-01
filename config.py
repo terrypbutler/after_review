@@ -15,8 +15,15 @@ ANALYSIS_MODEL = "gemini-3.6-flash"
 OPENAI_REACTION_MODEL = "gpt-5.6-terra"
 OPENAI_ANALYSIS_MODEL = "gpt-5.6-sol"
 
-YEAR_7_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRWjfO_UYUARLvEtyHGb0tW35YcgG0R6175_MvHnKkCSx-o6Aq7hvFOpjiobdoh7hmjULvIEdRWX8Ik/pub?gid=0&single=true&output=csv"
-YEAR_10_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRWjfO_UYUARLvEtyHGb0tW35YcgG0R6175_MvHnKkCSx-o6Aq7hvFOpjiobdoh7hmjULvIEdRWX8Ik/pub?gid=214766920&single=true&output=csv"
+SPREADSHEET_ID = "1suZQlbQxzt8gJm_hTdBYoQAmz-TgkHq57I_sXwlvCME"
+YEAR_7_URL = (
+    f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export"
+    "?format=csv&gid=0"
+)
+YEAR_10_URL = (
+    f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export"
+    "?format=csv&gid=214766920"
+)
 
 COHORT_URLS = {
     "Year 7": YEAR_7_URL,
