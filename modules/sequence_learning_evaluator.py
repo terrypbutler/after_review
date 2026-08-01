@@ -10,8 +10,7 @@ import pypdf
 import streamlit as st
 
 from config import ANALYSIS_MODEL
-from modules.app_secrets import get_secret
-from modules import gemini_client as genai
+from modules import ai_client as genai
 from modules.data_utils import get_ai_response_profile
 
 
@@ -486,11 +485,8 @@ def render_sequence_evaluator(df, cohort, subject="General"):
         "rehearsal; real-pupil evidence is still required."
     )
 
-    api_key = get_secret("GEMINI_API_KEY")
-    if not api_key:
-        st.error("⚠️ Gemini API Key missing. Please add it to Streamlit secrets.")
+    if not genai.configure_selected_provider():
         return
-    genai.configure(api_key=api_key)
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🧭 Sequence evaluation")
