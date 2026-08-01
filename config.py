@@ -9,9 +9,14 @@ REACTION_MODEL = "gemini-3.5-flash-lite"
 # More capable model for complex lesson-plan analysis.
 ANALYSIS_MODEL = "gemini-3.6-flash"
 
-YEAR_7_URL = "https://docs.google.com/spreadsheets/d/1suZQlbQxzt8gJm_hTdBYoQAmz-TgkHq57I_sXwlvCME/export?format=csv&gid=0"
+# OpenAI equivalents used when the sidebar provider toggle is enabled. The
+# interactive model balances responsiveness and cost; the analysis model is
+# reserved for the two deeper lesson-review tools.
+OPENAI_REACTION_MODEL = "gpt-5.6-terra"
+OPENAI_ANALYSIS_MODEL = "gpt-5.6-sol"
 
-YEAR_10_URL = "https://docs.google.com/spreadsheets/d/1suZQlbQxzt8gJm_hTdBYoQAmz-TgkHq57I_sXwlvCME/export?format=csv&gid=214766920"
+YEAR_7_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRWjfO_UYUARLvEtyHGb0tW35YcgG0R6175_MvHnKkCSx-o6Aq7hvFOpjiobdoh7hmjULvIEdRWX8Ik/pub?gid=0&single=true&output=csv"
+YEAR_10_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRWjfO_UYUARLvEtyHGb0tW35YcgG0R6175_MvHnKkCSx-o6Aq7hvFOpjiobdoh7hmjULvIEdRWX8Ik/pub?gid=214766920&single=true&output=csv"
 
 COHORT_URLS = {
     "Year 7": YEAR_7_URL,
