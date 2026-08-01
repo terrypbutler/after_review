@@ -3,6 +3,7 @@ pandas
 altair
 Pillow
 google-genai
+openai
 pypdf
 python-docx==1.1.0
 elevenlabs
