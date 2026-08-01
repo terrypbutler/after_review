@@ -18,8 +18,6 @@ LAYOUT_HORSESHOE = "Horseshoe (8 Tables)"
 
 DEFAULT_ZONES = {
     "front_edge": "Top",
-    "door_side": "Left",
-    "calm_zone": "Back right",
     "teacher_start": "Front centre",
 }
 
@@ -147,9 +145,11 @@ def ensure_suggested_plan(
     plan.setdefault("circulation_path", [])
     plan.setdefault("source", "Saved in Seating Plan")
     plan.setdefault("cleared", False)
-    zones = plan.setdefault("zones", {})
-    for name, value in DEFAULT_ZONES.items():
-        zones.setdefault(name, value)
+    saved_zones = plan.setdefault("zones", {})
+    plan["zones"] = {
+        name: saved_zones.get(name, value)
+        for name, value in DEFAULT_ZONES.items()
+    }
     rationale = plan.setdefault("rationale", {})
     for name, value in DEFAULT_RATIONALE.items():
         rationale.setdefault(name, value)
@@ -424,26 +424,12 @@ def seat_zone_labels(plan: dict, seat_key: str) -> list[str]:
     if (front_is_top and y >= 0.66) or (not front_is_top and y <= 0.34):
         labels.append("back")
 
-    if (zones["door_side"] == "Left" and x <= 0.25) or (
-        zones["door_side"] == "Right" and x >= 0.75
-    ):
-        labels.append("near door/resources")
-
-    calm_targets = {
-        "Front left": (0.1, 0.1 if front_is_top else 0.9),
-        "Front right": (0.9, 0.1 if front_is_top else 0.9),
-        "Back left": (0.1, 0.9 if front_is_top else 0.1),
-        "Back right": (0.9, 0.9 if front_is_top else 0.1),
-    }
-    calm_x, calm_y = calm_targets.get(zones["calm_zone"], calm_targets["Back right"])
-    if math.hypot(x - calm_x, y - calm_y) <= 0.32:
-        labels.append("near calm/low-traffic area")
-
     teacher_targets = {
         "Front centre": (0.5, 0.08 if front_is_top else 0.92),
-        "Door": (0.05 if zones["door_side"] == "Left" else 0.95, 0.5),
+        "Centre": (0.5, 0.5),
         "Back centre": (0.5, 0.92 if front_is_top else 0.08),
-        "Calm area": (calm_x, calm_y),
+        "Left side": (0.08, 0.5),
+        "Right side": (0.92, 0.5),
     }
     teacher_x, teacher_y = teacher_targets.get(
         zones["teacher_start"], teacher_targets["Front centre"]
@@ -752,33 +738,12 @@ def seating_plan_checks(plan: dict, df: pd.DataFrame) -> dict:
     zone_distribution = {
         "front": [],
         "back": [],
-        "near door/resources": [],
-        "near calm/low-traffic area": [],
         "near teacher start": [],
     }
     for seat_key, name in seated.items():
         for label in seat_zone_labels(plan, seat_key):
             if label in zone_distribution:
                 zone_distribution[label].append(name)
-    if zone_distribution["near door/resources"]:
-        pupils = zone_distribution["near door/resources"]
-        alerts.append(
-            {
-                "level": "info",
-                "title": "Door/resources zone",
-                "message": f"{len(pupils)} pupil(s) sit in the configured busier zone: {', '.join(pupils[:6])}{'…' if len(pupils) > 6 else ''}",
-            }
-        )
-    if zone_distribution["near calm/low-traffic area"]:
-        pupils = zone_distribution["near calm/low-traffic area"]
-        alerts.append(
-            {
-                "level": "info",
-                "title": "Calm/low-traffic zone",
-                "message": f"{len(pupils)} pupil(s) sit near the configured calm area; check that each placement is intentional.",
-            }
-        )
-
     if not alerts:
         alerts.append(
             {
@@ -860,8 +825,6 @@ def mentor_evidence_summary(plan: dict, df: pd.DataFrame, checks: dict | None = 
         "Room zones: "
         f"front={len(zone_distribution['front'])}, "
         f"back={len(zone_distribution['back'])}, "
-        f"door/resources={len(zone_distribution['near door/resources'])}, "
-        f"calm={len(zone_distribution['near calm/low-traffic area'])}, "
         f"near teacher start={len(zone_distribution['near teacher start'])}."
     )
     rationale_lines = rationale_summary_lines(plan)
