@@ -7,8 +7,7 @@ from modules.app_shell import (
     get_teacher_address_options,
     get_teacher_display_name,
 )
-from modules.app_secrets import get_secret
-from modules import gemini_client as genai
+from modules import ai_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
 
@@ -41,12 +40,8 @@ def render_simulator(df, cohort):
     with col_header2:
         enable_voice = st.toggle("🔊 Voice Audio", value=True, key="sim_voice_toggle")
 
-    api_key = get_secret("GEMINI_API_KEY")
-    if not api_key:
-        st.error("⚠️ Gemini API Key missing.")
+    if not genai.configure_selected_provider():
         return
-
-    genai.configure(api_key=api_key)
 
     student_list = df["Full Name"].tolist()
     selected_student = st.selectbox("Select Student to Roleplay:", student_list)
@@ -158,7 +153,10 @@ def render_simulator(df, cohort):
                     response = model.generate_content(system_prompt, generation_config={"response_mime_type": "application/json"})
 
                     if not response.parts:
-                        st.error("⚠️ Gemini refused to answer. The scenario likely triggered a safety filter.")
+                        st.error(
+                            f"⚠️ {genai.provider_name()} returned no content. "
+                            "The scenario may have triggered a safety filter."
+                        )
                         st.stop()
 
                     raw_text = response.text.replace("```json", "").replace("```", "")
@@ -168,7 +166,7 @@ def render_simulator(df, cohort):
                     current_emotion = ai_data.get("emotion", "neutral")
                     
                 except Exception as e:
-                    st.error(f"Gemini API Error: {e}")
+                    st.error(f"{genai.provider_name()} API error: {e}")
                     st.stop()
 
             # SPEED HACK: Instantly show the text on screen BEFORE generating audio
