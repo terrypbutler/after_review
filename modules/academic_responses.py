@@ -249,6 +249,21 @@ def _voice_settings_for_cohort(cohort):
     }
 
 
+DEFAULT_STUDENT_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"
+
+
+def get_student_voice_id(row):
+    """Return the pupil's spreadsheet voice ID with a safe final fallback."""
+    explicit_voice = get_flexible_text(
+        row,
+        ["Voice_Name", "Voice Name", "Voice ID", "Voice_ID"],
+        default="",
+    )
+    if explicit_voice:
+        return explicit_voice
+    return DEFAULT_STUDENT_VOICE_ID
+
+
 def get_elevenlabs_audio(
     text,
     voice_id="JBFqnCBsd6RMkjVDRZzb",
@@ -1359,10 +1374,8 @@ def _render_peer_discussion_strategy(
                             ]
                             audio_bytes = None
                             if not speaker_rows.empty:
-                                voice_id = get_flexible_text(
-                                    speaker_rows.iloc[0],
-                                    ["Voice_Name", "Voice ID", "Voice_ID"],
-                                    "JBFqnCBsd6RMkjVDRZzb",
+                                voice_id = get_student_voice_id(
+                                    speaker_rows.iloc[0]
                                 )
                                 audio_bytes = get_elevenlabs_audio(
                                     turn["dialogue"],
@@ -1674,7 +1687,7 @@ def render_academic_responses(df, cohort, subject="General"):
                             st.toast(f"Student Mood: {current_emotion.upper()} 🎭")
                             
                             if enable_voice:
-                                student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
+                                student_voice_id = get_student_voice_id(target_row)
                                 audio_bytes = get_elevenlabs_audio(
                                     reply_text,
                                     student_voice_id,
@@ -1919,7 +1932,7 @@ def render_academic_responses(df, cohort, subject="General"):
                             target_row = df[df["Full Name"] == target_name].iloc[0]
 
                             if enable_voice:
-                                student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
+                                student_voice_id = get_student_voice_id(target_row)
                                 audio_bytes = get_elevenlabs_audio(
                                     student_reply,
                                     student_voice_id,
@@ -1955,7 +1968,7 @@ def render_academic_responses(df, cohort, subject="General"):
                                 st.toast(f"Student Mood: {current_emotion.upper()} 🎭")
                                 
                                 if enable_voice:
-                                    student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
+                                    student_voice_id = get_student_voice_id(target_row)
                                     audio_bytes = get_elevenlabs_audio(
                                         reply_text,
                                         student_voice_id,
@@ -2030,7 +2043,7 @@ def render_academic_responses(df, cohort, subject="General"):
                             target_row = df[df["Full Name"] == target_name].iloc[0]
 
                             if enable_voice:
-                                student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
+                                student_voice_id = get_student_voice_id(target_row)
                                 audio_bytes = get_elevenlabs_audio(
                                     student_reply,
                                     student_voice_id,
@@ -2062,7 +2075,7 @@ def render_academic_responses(df, cohort, subject="General"):
                             st.toast(f"Student Mood: {current_emotion.upper()} 🎭")
                             
                             if enable_voice:
-                                student_voice_id = target_row.get("Voice_Name", "JBFqnCBsd6RMkjVDRZzb")
+                                student_voice_id = get_student_voice_id(target_row)
                                 audio_bytes = get_elevenlabs_audio(
                                     reply_text,
                                     student_voice_id,
