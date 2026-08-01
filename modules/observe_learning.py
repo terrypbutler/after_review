@@ -9,8 +9,7 @@ from modules.app_shell import (
     get_teacher_address_options,
     get_teacher_display_name,
 )
-from modules.app_secrets import get_secret
-from modules import gemini_client as genai
+from modules import ai_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
 from modules.seating_plan_utils import (
@@ -537,11 +536,8 @@ def render_observation_room(df, cohort):
         )
     render_seating_plan_overview(seating_plan, df, "Observe Learning")
 
-    api_key = get_secret("GEMINI_API_KEY")
-    if not api_key:
-        st.error("⚠️ Gemini API Key missing.")
+    if not genai.configure_selected_provider():
         return
-    genai.configure(api_key=api_key)
 
     # --- 1. INITIALIZE THE STATE MACHINE ---
     if "obs_task" not in st.session_state: st.session_state.obs_task = ""
@@ -674,7 +670,10 @@ def render_observation_room(df, cohort):
                         
                         # --- THE SAFETY NET RE-ACTIVATED ---
                         if not response.parts:
-                            st.error("⚠️ Gemini safety filter blocked this response (Likely SPII/Privacy). Try rewording the interaction.")
+                            st.error(
+                                f"⚠️ {genai.provider_name()} returned no content. "
+                                "Try rewording the interaction."
+                            )
                             st.stop()
                             
                         raw_text = response.text.replace("```json", "").replace("```", "")
@@ -711,7 +710,7 @@ def render_observation_room(df, cohort):
                             st.info(f"➖ Neutral interaction.")
                         
                     except Exception as e:
-                        st.error(f"Gemini Error: {e}")
+                        st.error(f"{genai.provider_name()} error: {e}")
                         st.stop()
 
                 st.session_state[chat_key].append({"role": "assistant", "content": display_text})
@@ -860,7 +859,10 @@ def render_observation_room(df, cohort):
                                     response = model.generate_content(contents, generation_config={"response_mime_type": "application/json"})
                                     
                                     if not response.parts:
-                                        st.error("⚠️ Gemini safety filter blocked the room generation.")
+                                        st.error(
+                                            f"⚠️ {genai.provider_name()} returned no "
+                                            "room-generation content."
+                                        )
                                         st.stop()
                                         
                                     raw_text = response.text.replace("```json", "").replace("```", "")
@@ -974,7 +976,10 @@ def render_observation_room(df, cohort):
                                     response = model.generate_content(contents, generation_config={"response_mime_type": "application/json"})
                                     
                                     if not response.parts:
-                                        st.error("⚠️ Gemini safety filter blocked the scan.")
+                                        st.error(
+                                            f"⚠️ {genai.provider_name()} returned no "
+                                            "scan content."
+                                        )
                                         st.stop()
                                         
                                     raw_text = response.text.replace("```json", "").replace("```", "")
@@ -1116,7 +1121,10 @@ def render_observation_room(df, cohort):
                         response = model.generate_content(broadcast_prompt, generation_config={"response_mime_type": "application/json"})
                         
                         if not response.parts:
-                            st.error("⚠️ Gemini safety filter blocked the class reaction.")
+                            st.error(
+                                f"⚠️ {genai.provider_name()} returned no class "
+                                "reaction content."
+                            )
                             st.stop()
                             
                         raw_text = response.text.replace("```json", "").replace("```", "")
