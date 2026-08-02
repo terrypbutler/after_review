@@ -1,4 +1,7 @@
+import sys
+import types
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -9,6 +12,8 @@ from modules.simulation_options import (
     OPTIONS_STATE_VERSION,
     OPTIONS_STATE_VERSION_KEY,
     SCORE_FACTOR_KEYS,
+    SCORE_WIDGET_KEYS,
+    _save_slider_value,
     active_score_factor_summary,
     apply_attainment_factor,
     apply_score_factors,
@@ -20,28 +25,31 @@ from modules.simulation_options import (
 
 class SimulationOptionTests(unittest.TestCase):
     def test_initialise_options_sets_neutral_defaults_without_overwriting(self):
+        confidence_key = SCORE_FACTOR_KEYS["Academic Confidence"]
         state = {
-            "option_factor_confidence": 1.25,
+            confidence_key: 1.25,
             OPTIONS_STATE_VERSION_KEY: OPTIONS_STATE_VERSION,
         }
 
         initialise_score_options(state)
 
-        self.assertEqual(state["option_factor_confidence"], 1.25)
+        self.assertEqual(state[confidence_key], 1.25)
         self.assertTrue(
             all(key in state for key in SCORE_FACTOR_KEYS.values())
         )
         self.assertEqual(state[ATTAINMENT_FACTOR_KEY], DEFAULT_SCORE_FACTOR)
 
     def test_initialise_options_centres_sliders_after_state_upgrade(self):
+        participation_key = SCORE_FACTOR_KEYS["Participation Level"]
         state = {
-            "option_factor_participation": 0.50,
+            participation_key: 0.50,
             ATTAINMENT_FACTOR_KEY: 0.50,
+            OPTIONS_STATE_VERSION_KEY: OPTIONS_STATE_VERSION - 1,
         }
 
         initialise_score_options(state)
 
-        self.assertEqual(state["option_factor_participation"], 1.00)
+        self.assertEqual(state[participation_key], 1.00)
         self.assertEqual(state[ATTAINMENT_FACTOR_KEY], 1.00)
         self.assertEqual(
             state[OPTIONS_STATE_VERSION_KEY],
@@ -92,9 +100,9 @@ class SimulationOptionTests(unittest.TestCase):
 
     def test_invalid_and_out_of_range_state_is_safely_normalised(self):
         state = {
-            "option_factor_participation": 9,
-            "option_factor_confidence": "not-a-number",
-            "option_factor_processing": 0,
+            SCORE_FACTOR_KEYS["Participation Level"]: 9,
+            SCORE_FACTOR_KEYS["Academic Confidence"]: "not-a-number",
+            SCORE_FACTOR_KEYS["Processing Speed"]: 0,
         }
 
         factors = current_score_factors(state)
@@ -107,6 +115,23 @@ class SimulationOptionTests(unittest.TestCase):
             active_score_factor_summary(state),
             ["Participation Level: 1.50×", "Processing Speed: 0.50×"],
         )
+
+    def test_slider_callback_survives_temporary_widget_cleanup(self):
+        column = "Participation Level"
+        saved_key = SCORE_FACTOR_KEYS[column]
+        widget_key = SCORE_WIDGET_KEYS[column]
+        state = {
+            saved_key: DEFAULT_SCORE_FACTOR,
+            widget_key: 1.25,
+        }
+        fake_streamlit = types.ModuleType("streamlit")
+        fake_streamlit.session_state = state
+
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}):
+            _save_slider_value(widget_key, saved_key)
+        del state[widget_key]
+
+        self.assertEqual(current_score_factors(state)[column], 1.25)
 
     def test_attainment_factor_is_bounded_and_included_in_status(self):
         state = {ATTAINMENT_FACTOR_KEY: 2}
