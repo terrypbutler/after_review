@@ -6,6 +6,7 @@ import re
 import pandas as pd
 
 from config import COLUMN_ALIASES, COLUMNS_TO_HIDE
+from modules.simulation_options import ATTAINMENT_FACTOR_COLUMN
 
 
 EMPTY_MARKERS = {"", "0", "0.0", "FALSE", "N", "N/A", "NAN", "NO", "NONE", "NULL"}
@@ -174,6 +175,24 @@ def get_ai_response_profile(
         profile = (
             "Current scenario metrics (authoritative for this run; ignore earlier "
             f"metric numbers): {', '.join(scenario_metrics)} | {profile}"
+        )
+
+    attainment_factor_text = _row_value(row, [ATTAINMENT_FACTOR_COLUMN])
+    try:
+        attainment_factor = float(attainment_factor_text)
+    except (TypeError, ValueError):
+        attainment_factor = 1.0
+    if attainment_factor < 1.0:
+        profile = (
+            f"Scenario attainment is reduced to {attainment_factor:.2f}×: make "
+            "secure/correct academic answers less likely and partial, mistaken, "
+            f"uncertain or no-attempt responses more likely | {profile}"
+        )
+    elif attainment_factor > 1.0:
+        profile = (
+            f"Scenario attainment is increased to {attainment_factor:.2f}×: make "
+            "secure/correct academic answers more likely while keeping responses "
+            f"age-authentic | {profile}"
         )
 
     report_column = SUBJECT_REPORT_COLUMNS.get(_clean_profile_value(subject).casefold())
