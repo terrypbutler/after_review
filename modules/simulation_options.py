@@ -1,4 +1,3 @@
-
 """Session-scoped controls for adjusting virtual-pupil simulation metrics."""
 
 from collections.abc import Mapping, MutableMapping
@@ -9,22 +8,24 @@ import pandas as pd
 MIN_SCORE_FACTOR = 0.50
 MAX_SCORE_FACTOR = 1.50
 DEFAULT_SCORE_FACTOR = 1.00
-ATTAINMENT_FACTOR_KEY = "option_factor_attainment"
+ATTAINMENT_FACTOR_KEY = "saved_simulation_factor_attainment"
 ATTAINMENT_FACTOR_COLUMN = "_Scenario Attainment Factor"
 OPTIONS_STATE_VERSION_KEY = "_simulation_options_state_version"
-OPTIONS_STATE_VERSION = 2
+OPTIONS_STATE_VERSION = 3
 
 SCORE_FACTOR_KEYS = {
-    "Participation Level": "option_factor_participation",
-    "Academic Confidence": "option_factor_confidence",
-    "Processing Speed": "option_factor_processing",
-    "Independence": "option_factor_independence",
+    "Participation Level": "saved_simulation_factor_participation",
+    "Academic Confidence": "saved_simulation_factor_confidence",
+    "Processing Speed": "saved_simulation_factor_processing",
+    "Independence": "saved_simulation_factor_independence",
 }
 SCORE_WIDGET_KEYS = {
-    column: f"{state_key}_slider"
-    for column, state_key in SCORE_FACTOR_KEYS.items()
+    "Participation Level": "simulation_slider_participation",
+    "Academic Confidence": "simulation_slider_confidence",
+    "Processing Speed": "simulation_slider_processing",
+    "Independence": "simulation_slider_independence",
 }
-ATTAINMENT_WIDGET_KEY = f"{ATTAINMENT_FACTOR_KEY}_slider"
+ATTAINMENT_WIDGET_KEY = "simulation_slider_attainment"
 
 
 def initialise_score_options(state: MutableMapping) -> None:
