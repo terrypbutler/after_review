@@ -1,9 +1,13 @@
 import importlib.util
+import sys
 import unittest
 from unittest.mock import patch
 
 
-STREAMLIT_AVAILABLE = importlib.util.find_spec("streamlit") is not None
+STREAMLIT_AVAILABLE = (
+    "streamlit" not in sys.modules
+    and importlib.util.find_spec("streamlit") is not None
+)
 
 
 class AppSmokeTests(unittest.TestCase):
@@ -47,7 +51,9 @@ class AppSmokeTests(unittest.TestCase):
             "Simulator",
             "Academic AfL",
             "Lesson Stress-Tester",
+            "Sequence Evaluator",
             "Observe Learning",
+            "Options",
         ]:
             with self.subTest(page=page):
                 app.sidebar.radio[0].set_value(page)
