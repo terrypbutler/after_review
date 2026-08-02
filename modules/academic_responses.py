@@ -22,6 +22,12 @@ from modules.audio_utils import (
 from modules import ai_client as genai
 from modules.data_utils import get_ai_response_profile
 from modules.photo_utils import display_student_photo
+from modules.simulation_options import (
+    ATTAINMENT_FACTOR_COLUMN,
+    DEFAULT_SCORE_FACTOR,
+    MAX_SCORE_FACTOR,
+    MIN_SCORE_FACTOR,
+)
 from modules.seating_plan_utils import (
     ensure_suggested_plan,
     order_dataframe_by_plan,
@@ -485,11 +491,21 @@ def _student_attainment_score(row, subject):
         if attainment_evidence
         else 50.0
     )
-    if not learning_metrics:
-        return attainment
+    if learning_metrics:
+        learning_readiness = sum(learning_metrics) / len(learning_metrics)
+        attainment = 0.78 * attainment + 0.22 * learning_readiness
 
-    learning_readiness = sum(learning_metrics) / len(learning_metrics)
-    return 0.78 * attainment + 0.22 * learning_readiness
+    factor_text = get_flexible_text(
+        row,
+        [ATTAINMENT_FACTOR_COLUMN],
+        default=str(DEFAULT_SCORE_FACTOR),
+    )
+    try:
+        factor = float(factor_text)
+    except (TypeError, ValueError):
+        factor = DEFAULT_SCORE_FACTOR
+    factor = min(MAX_SCORE_FACTOR, max(MIN_SCORE_FACTOR, factor))
+    return max(0.0, min(100.0, attainment * factor))
 
 
 def _student_response_readiness(row):
