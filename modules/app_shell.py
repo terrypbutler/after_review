@@ -20,6 +20,7 @@ NAV_ITEMS = [
     "Lesson Stress-Tester",
     "Sequence Evaluator",
     "Observe Learning",
+    "Options",
 ]
 
 NAV_LABELS = {
@@ -34,6 +35,7 @@ NAV_LABELS = {
     "Lesson Stress-Tester": "⚡  Lesson stress-test",
     "Sequence Evaluator": "⇥  Sequence evaluator",
     "Observe Learning": "◎  Observe learning",
+    "Options": "⚙  Options",
 }
 
 
