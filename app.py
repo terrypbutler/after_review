@@ -68,10 +68,6 @@ def get_cohort_data(cohort):
 
 
 page = render_navigation()
-render_provider_status()
-render_score_option_status()
-render_teacher_identity()
-render_sidebar_footer(load_data.clear)
 
 if page == "Home":
     render_home(cohort_data, load_errors)
@@ -421,3 +417,10 @@ elif page == "Observe Learning":
     )
     from modules.observe_learning import render_observation_room
     render_observation_room(filtered_df, cohort)
+
+
+# Keep page-specific class controls directly below Workspace navigation.
+render_provider_status()
+render_score_option_status()
+render_teacher_identity()
+render_sidebar_footer(load_data.clear)
