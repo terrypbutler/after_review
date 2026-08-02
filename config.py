@@ -9,7 +9,7 @@ REACTION_MODEL = "gemini-3.5-flash-lite"
 # More capable model for complex lesson-plan analysis.
 ANALYSIS_MODEL = "gemini-3.6-flash"
 
-# OpenAI equivalents used when the sidebar provider toggle is enabled. The
+# OpenAI equivalents used when OpenAI is selected on the Options page. The
 # interactive model balances responsiveness and cost; the analysis model is
 # reserved for the two deeper lesson-review tools.
 OPENAI_REACTION_MODEL = "gpt-5.6-terra"
