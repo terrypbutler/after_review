@@ -1,3 +1,4 @@
+
 """Session-scoped controls for adjusting virtual-pupil simulation metrics."""
 
 from collections.abc import Mapping, MutableMapping
@@ -10,6 +11,8 @@ MAX_SCORE_FACTOR = 1.50
 DEFAULT_SCORE_FACTOR = 1.00
 ATTAINMENT_FACTOR_KEY = "option_factor_attainment"
 ATTAINMENT_FACTOR_COLUMN = "_Scenario Attainment Factor"
+OPTIONS_STATE_VERSION_KEY = "_simulation_options_state_version"
+OPTIONS_STATE_VERSION = 2
 
 SCORE_FACTOR_KEYS = {
     "Participation Level": "option_factor_participation",
@@ -17,10 +20,22 @@ SCORE_FACTOR_KEYS = {
     "Processing Speed": "option_factor_processing",
     "Independence": "option_factor_independence",
 }
+SCORE_WIDGET_KEYS = {
+    column: f"{state_key}_slider"
+    for column, state_key in SCORE_FACTOR_KEYS.items()
+}
+ATTAINMENT_WIDGET_KEY = f"{ATTAINMENT_FACTOR_KEY}_slider"
 
 
 def initialise_score_options(state: MutableMapping) -> None:
-    """Create neutral defaults without overwriting the current browser session."""
+    """Create persistent neutral defaults outside Streamlit widget state."""
+    if state.get(OPTIONS_STATE_VERSION_KEY) != OPTIONS_STATE_VERSION:
+        for state_key in SCORE_FACTOR_KEYS.values():
+            state[state_key] = DEFAULT_SCORE_FACTOR
+        state[ATTAINMENT_FACTOR_KEY] = DEFAULT_SCORE_FACTOR
+        state[OPTIONS_STATE_VERSION_KEY] = OPTIONS_STATE_VERSION
+        return
+
     for state_key in SCORE_FACTOR_KEYS.values():
         state.setdefault(state_key, DEFAULT_SCORE_FACTOR)
     state.setdefault(ATTAINMENT_FACTOR_KEY, DEFAULT_SCORE_FACTOR)
@@ -105,9 +120,21 @@ def _reset_score_options() -> None:
     """Reset slider-backed keys safely from a Streamlit callback."""
     import streamlit as st
 
-    for state_key in SCORE_FACTOR_KEYS.values():
+    for column, state_key in SCORE_FACTOR_KEYS.items():
         st.session_state[state_key] = DEFAULT_SCORE_FACTOR
+        widget_key = SCORE_WIDGET_KEYS[column]
+        if widget_key in st.session_state:
+            st.session_state[widget_key] = DEFAULT_SCORE_FACTOR
     st.session_state[ATTAINMENT_FACTOR_KEY] = DEFAULT_SCORE_FACTOR
+    if ATTAINMENT_WIDGET_KEY in st.session_state:
+        st.session_state[ATTAINMENT_WIDGET_KEY] = DEFAULT_SCORE_FACTOR
+
+
+def _save_slider_value(widget_key: str, state_key: str) -> None:
+    """Copy a temporary widget value into persistent session state."""
+    import streamlit as st
+
+    st.session_state[state_key] = st.session_state[widget_key]
 
 
 def render_score_options() -> None:
@@ -129,30 +156,47 @@ def render_score_options() -> None:
         controls,
     ):
         with container:
+            widget_key = SCORE_WIDGET_KEYS[column]
+            initial_value = {}
+            if widget_key not in st.session_state:
+                initial_value["value"] = current_score_factors(
+                    st.session_state
+                )[column]
             st.slider(
                 column,
                 min_value=MIN_SCORE_FACTOR,
                 max_value=MAX_SCORE_FACTOR,
                 step=0.05,
                 format="%.2f×",
-                key=state_key,
+                key=widget_key,
+                on_change=_save_slider_value,
+                args=(widget_key, state_key),
                 help=(
                     f"Multiplies every pupil's {column} score for this browser "
                     "session without changing the spreadsheet."
                 ),
+                **initial_value,
             )
 
+    attainment_initial_value = {}
+    if ATTAINMENT_WIDGET_KEY not in st.session_state:
+        attainment_initial_value["value"] = current_attainment_factor(
+            st.session_state
+        )
     st.slider(
         "Attainment / answer success",
         min_value=MIN_SCORE_FACTOR,
         max_value=MAX_SCORE_FACTOR,
         step=0.05,
         format="%.2f×",
-        key=ATTAINMENT_FACTOR_KEY,
+        key=ATTAINMENT_WIDGET_KEY,
+        on_change=_save_slider_value,
+        args=(ATTAINMENT_WIDGET_KEY, ATTAINMENT_FACTOR_KEY),
         help=(
             "Adjusts how likely pupils are to produce secure or correct academic "
             "answers. Participation still controls their willingness to respond."
         ),
+        **attainment_initial_value,
     )
     st.caption(
         "Below 1.00× makes partial, incorrect and uncertain answers more likely; "
