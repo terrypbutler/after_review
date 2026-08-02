@@ -20,6 +20,7 @@ from config import (
 GEMINI_PROVIDER = "Gemini"
 OPENAI_PROVIDER = "OpenAI"
 PROVIDER_TOGGLE_KEY = "use_openai_provider"
+PROVIDER_OPTION_KEY = "ai_provider_option"
 
 _provider = GEMINI_PROVIDER
 _gemini_client = None
@@ -41,6 +42,9 @@ def selected_provider() -> str:
     """Return the provider currently selected in Streamlit session state."""
     import streamlit as st
 
+    selected_option = st.session_state.get(PROVIDER_OPTION_KEY)
+    if selected_option in {GEMINI_PROVIDER, OPENAI_PROVIDER}:
+        return selected_option
     return (
         OPENAI_PROVIDER
         if st.session_state.get(PROVIDER_TOGGLE_KEY, False)
@@ -53,27 +57,39 @@ def provider_name() -> str:
     return _provider
 
 
-def render_provider_selector() -> str:
-    """Render the app-wide Gemini/OpenAI sidebar toggle."""
+def render_provider_options() -> str:
+    """Render the app-wide Gemini/OpenAI selector on the Options page."""
     import streamlit as st
 
-    st.sidebar.divider()
-    st.sidebar.markdown("### AI provider")
-    use_openai = st.sidebar.toggle(
-        "Use OpenAI instead of Gemini",
-        value=False,
-        key=PROVIDER_TOGGLE_KEY,
+    if PROVIDER_OPTION_KEY not in st.session_state:
+        st.session_state[PROVIDER_OPTION_KEY] = selected_provider()
+    provider = st.radio(
+        "AI provider",
+        [GEMINI_PROVIDER, OPENAI_PROVIDER],
+        horizontal=True,
+        key=PROVIDER_OPTION_KEY,
         help="Switches every AI-powered teaching tool for this browser session.",
     )
-    provider = OPENAI_PROVIDER if use_openai else GEMINI_PROVIDER
+    st.session_state[PROVIDER_TOGGLE_KEY] = provider == OPENAI_PROVIDER
     if provider == OPENAI_PROVIDER:
-        st.sidebar.caption(
+        st.caption(
             f"Using OpenAI · {OPENAI_REACTION_MODEL} for interactive work · "
             f"{OPENAI_ANALYSIS_MODEL} for deeper analysis"
         )
     else:
-        st.sidebar.caption("Using Gemini with the existing app model settings")
+        st.caption("Using Gemini with the existing app model settings")
     return provider
+
+
+def render_provider_status() -> None:
+    """Show the current provider in the sidebar without duplicating its control."""
+    import streamlit as st
+
+    st.sidebar.divider()
+    st.sidebar.markdown("### AI provider")
+    st.sidebar.caption(
+        f"Current: **{selected_provider()}** · Change this on the Options page."
+    )
 
 
 def configure(provider: str, api_key: str) -> None:
