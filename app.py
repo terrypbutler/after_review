@@ -11,9 +11,16 @@ from modules.app_shell import (
     render_teacher_identity,
 )
 from modules.class_setup import render_class_filter, render_subject_class_setup
-from modules.ai_client import render_provider_selector
+from modules.ai_client import render_provider_options, render_provider_status
 from modules.data_loader import DataLoadError, load_data
 from modules.data_utils import count_active
+from modules.simulation_options import (
+    apply_score_factors,
+    current_score_factors,
+    initialise_score_options,
+    render_score_options,
+    render_score_option_status,
+)
 from modules.report_renderers import (
     generate_printable_html,
     render_photo_grid,
@@ -28,12 +35,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 apply_app_styles()
+initialise_score_options(st.session_state)
+score_factors = current_score_factors(st.session_state)
 
 cohort_data = {}
 load_errors = {}
 for cohort_name, cohort_url in COHORT_URLS.items():
     try:
-        cohort_data[cohort_name] = load_data(cohort_url)
+        cohort_data[cohort_name] = apply_score_factors(
+            load_data(cohort_url),
+            score_factors,
+        )
     except DataLoadError as exc:
         cohort_data[cohort_name] = pd.DataFrame()
         load_errors[cohort_name] = str(exc)
@@ -50,12 +62,26 @@ def get_cohort_data(cohort):
 
 
 page = render_navigation()
-render_provider_selector()
+render_provider_status()
+render_score_option_status()
 render_teacher_identity()
 render_sidebar_footer(load_data.clear)
 
 if page == "Home":
     render_home(cohort_data, load_errors)
+
+elif page == "Options":
+    st.title("Options")
+    st.caption(
+        "Choose the AI service and tune the virtual pupils for this browser "
+        "session. The Google Sheet is never changed."
+    )
+    with st.container(border=True):
+        st.subheader("AI provider")
+        render_provider_options()
+    st.divider()
+    with st.container(border=True):
+        render_score_options()
 
 elif page == "Student Search":
     st.title("Student search")
