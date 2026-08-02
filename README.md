@@ -26,9 +26,12 @@ streamlit run app.py
 
 For AI features, copy `.streamlit/secrets.toml.example` to
 `.streamlit/secrets.toml` and add `GEMINI_API_KEY`, `OPENAI_API_KEY`, or both.
-Use the app-wide sidebar toggle to choose the provider. The class-information
-and planning views work without either key, and secrets should never be pasted
-into the Python source.
+Use the Options page to choose Gemini or OpenAI. The same page can scale
+Participation Level, Academic Confidence, Processing Speed and Independence
+from 0.50× to 1.50× for the current browser session. These adjustments feed
+every page through the shared cohort data but never write back to the Google
+Sheet. The class-information and planning views work without either API key,
+and secrets should never be pasted into the Python source.
 
 To enable explicit seating-plan persistence, also configure
 `SEATING_PLAN_STORAGE_PATH` in `secrets.toml`. The example uses the ignored
