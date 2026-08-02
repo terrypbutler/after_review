@@ -160,6 +160,22 @@ def get_ai_response_profile(
         )
         profile = " | ".join(parts)
 
+    scenario_metrics = []
+    for label, columns in (
+        ("participation", ["Participation Level"]),
+        ("academic confidence", ["Academic Confidence"]),
+        ("processing speed", ["Processing Speed"]),
+        ("independence", ["Independence"]),
+    ):
+        value = _row_value(row, columns)
+        if value:
+            scenario_metrics.append(f"{label} {value}/100")
+    if scenario_metrics:
+        profile = (
+            "Current scenario metrics (authoritative for this run; ignore earlier "
+            f"metric numbers): {', '.join(scenario_metrics)} | {profile}"
+        )
+
     report_column = SUBJECT_REPORT_COLUMNS.get(_clean_profile_value(subject).casefold())
     if report_column:
         subject_evidence = _report_excerpt(_row_value(row, [report_column]))
